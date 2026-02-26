@@ -35,7 +35,9 @@ services:
       EX_BASE_URL: ${EX_BASE_URL:-https://exhentai.org}
       RATE_INTERVAL: ${RATE_INTERVAL:-1.0}
       CALLBACK_DETAIL_QUOTA: ${CALLBACK_DETAIL_QUOTA:-25}
-      CALLBACK_SKIP_THRESHOLD: ${CALLBACK_SKIP_THRESHOLD:-5}
+      CALLBACK_GID_WINDOW: ${CALLBACK_GID_WINDOW:-10000}
+      CALLBACK_RATING_DIFF_THRESHOLD: ${CALLBACK_RATING_DIFF_THRESHOLD:-0.5}
+      CALLBACK_INLINE_SET: ${CALLBACK_INLINE_SET:-dm_l}
       THUMB_RATE_INTERVAL: ${THUMB_RATE_INTERVAL:-1.0}
       THUMB_DIR: /data/thumbs
     volumes:
@@ -55,7 +57,7 @@ services:
       DATABASE_URL: ${DATABASE_URL}
       EX_COOKIES: ${EX_COOKIES}
       EX_BASE_URL: ${EX_BASE_URL:-https://exhentai.org}
-      TAG_BLACKLIST: ${TAG_BLACKLIST:-"male:males only,male:yaoi,female:amputee,female:futanari"}
+      TAG_BLACKLIST: ${TAG_BLACKLIST}
       THUMB_DIR: /data/thumbs
     volumes:
       - /opt/eh-stash/thumbs:/data/thumbs

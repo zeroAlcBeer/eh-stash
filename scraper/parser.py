@@ -1,18 +1,111 @@
 import re
+from dataclasses import dataclass
 from bs4 import BeautifulSoup, Tag
 
 GID_TOKEN_RE = re.compile(r"/g/(\d+)/([a-f0-9]+)/")
 NEXT_CURSOR_RE = re.compile(r'[?&]next=(\d+)')
+RATING_RE = re.compile(r"([0-5](?:\.\d+)?)")
+TAG_CLASS_RE = re.compile(r"^gt")
+OPACITY_RE = re.compile(r"opacity\s*:\s*([0-9.]+)")
+SPACE_RE = re.compile(r"\s+")
 
-def parse_gallery_list(html: str) -> tuple[list[tuple[int, str, str]], int | None]:
+
+@dataclass(frozen=True)
+class GalleryListItem:
+    gid: int
+    token: str
+    title: str
+    rating_sig: str
+    rating_est: float | None
+    visible_tag_count: int
+
+
+def _normalize_text(value: str) -> str:
+    return SPACE_RE.sub(" ", value or "").strip()
+
+
+def _extract_rating_signal(element: Tag) -> tuple[str, float | None]:
+    ir_node = element.find(class_=re.compile(r"\bir"))
+    if ir_node:
+        title = _normalize_text(ir_node.get("title", ""))
+        if title:
+            m = RATING_RE.search(title)
+            if m:
+                value = float(m.group(1))
+                return f"avg:{value:.2f}", value
+            return f"title:{title}", None
+
+        style = _normalize_text(ir_node.get("style", ""))
+        if style:
+            m = OPACITY_RE.search(style)
+            if m:
+                try:
+                    opacity = float(m.group(1))
+                    # EX list stars often encode fill ratio in opacity; map 0..1 to 0..5.
+                    estimate = max(0.0, min(5.0, opacity * 5.0))
+                    return f"style:{style.replace(' ', '')}", estimate
+                except ValueError:
+                    pass
+            return f"style:{style.replace(' ', '')}", None
+
+        classes = [c for c in (ir_node.get("class") or []) if c]
+        if classes:
+            return f"class:{','.join(sorted(classes))}", None
+
+    for klass in ("gl4e", "gl4t", "gl5t", "gl5m", "gl5c"):
+        node = element.find(class_=klass)
+        if not node:
+            continue
+        text = _normalize_text(node.get_text(" ", strip=True))
+        m = RATING_RE.search(text)
+        if m:
+            value = float(m.group(1))
+            return f"text:{value:.2f}", value
+
+    return "", None
+
+
+def _extract_visible_tags(element: Tag) -> set[str]:
+    tags: set[str] = set()
+
+    for node in element.find_all(True):
+        classes = node.get("class") or []
+        if not any(TAG_CLASS_RE.match(c) for c in classes):
+            continue
+        text = _normalize_text(node.get_text(" ", strip=True)).lower()
+        if not text:
+            continue
+        if len(text) > 80:
+            continue
+        tags.add(text)
+
+    if tags:
+        return tags
+
+    for a in element.find_all("a", href=True):
+        href = a.get("href", "")
+        if "f_search=" not in href:
+            continue
+        text = _normalize_text(a.get_text(" ", strip=True)).lower()
+        if not text:
+            continue
+        if len(text) > 80:
+            continue
+        if text in {"archive download", "torrent download"}:
+            continue
+        tags.add(text)
+    return tags
+
+
+def parse_gallery_list(html: str) -> tuple[list[GalleryListItem], int | None]:
     """
     解析列表页 HTML
     返回 (items, next_gid)
-      items    = [(gid, token, title), ...]
+      items    = [GalleryListItem(...), ...]
       next_gid = 下一页游标 GID，None 表示已到最后一页
     """
     soup = BeautifulSoup(html, "lxml")
-    results: list[tuple[int, str, str]] = []
+    results: list[GalleryListItem] = []
 
     itg = soup.find(class_="itg")
     if not itg:
@@ -45,9 +138,20 @@ def parse_gallery_list(html: str) -> tuple[list[tuple[int, str, str]], int | Non
             if not tag_children:
                 break
             node = tag_children[0]
-        title = node.get_text(strip=True) if isinstance(node, Tag) else str(node).strip()
+        title = _normalize_text(node.get_text(" ", strip=True) if isinstance(node, Tag) else str(node))
+        rating_sig, rating_est = _extract_rating_signal(element)
+        visible_tags = _extract_visible_tags(element)
 
-        results.append((gid, token, title))
+        results.append(
+            GalleryListItem(
+                gid=gid,
+                token=token,
+                title=title,
+                rating_sig=rating_sig,
+                rating_est=rating_est,
+                visible_tag_count=len(visible_tags),
+            )
+        )
 
     # 从分页栏提取下一页游标
     # ExHentai 分页: id="dnext" 为"下一页"按钮，href 含 next=<gid>

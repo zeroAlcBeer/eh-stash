@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import json
 import random
 import sys
 from pathlib import Path
@@ -9,8 +8,7 @@ from psycopg2.extras import Json
 
 import config
 import db
-from parser import parse_gallery_list, parse_detail
-from logic import decide_fetch_full, decide_fetch_callback
+from parser import parse_gallery_list, parse_detail, GalleryListItem
 
 logger = logging.getLogger(__name__)
 
@@ -31,12 +29,6 @@ _CATEGORY_BITS = {
 }
 
 CATEGORIES = ['Manga', 'Doujinshi', 'Cosplay']
-
-# 全部 6 个 job（scraper- 全量慢轨 + callback- 增量快轨）
-ALL_JOBS = (
-    [f'scraper-{c.lower()}' for c in CATEGORIES] +
-    [f'callback-{c.lower()}' for c in CATEGORIES]
-)
 
 async def validate_access(client: AsyncSession) -> bool:
     """Check if we can access the site without Sad Panda or Login errors."""
@@ -96,7 +88,7 @@ async def fetch_list_page(client: AsyncSession, category: str, next_gid: int | N
     返回 (items, next_cursor) 或 None（出错时）
     """
     fcats = _ALL_CATS - _CATEGORY_BITS.get(category, 0)
-    url = f"{config.EX_BASE_URL}/?f_cats={fcats}"
+    url = f"{config.EX_BASE_URL}/?f_cats={fcats}&inline_set={config.CALLBACK_INLINE_SET}"
     if next_gid is not None:
         url += f"&next={next_gid}"
     cursor_label = f"next={next_gid}" if next_gid else "first"
@@ -138,23 +130,49 @@ async def fetch_detail(client: AsyncSession, gid: int, token: str):
         logger.error(f"Error fetching detail: {e}")
         return None
 
+def _default_state(job_name: str) -> dict:
+    if job_name.startswith("scraper-"):
+        return {"next_gid": None, "round": 0, "done": False}
+    return {"next_gid": None, "round": 0, "latest_gid": None, "cutoff_gid": None}
+
+
 def get_state(job_name):
+    default_state = _default_state(job_name)
     with db.get_cursor() as (cur, conn):
         cur.execute("SELECT state FROM schedule_state WHERE job_name = %s", (job_name,))
         row = cur.fetchone()
-        state = row[0] if (row and row[0]) else {"next_gid": None, "round": 0}
-        # Migrate old state formats
+        state = row[0] if (row and row[0]) else dict(default_state)
+        dirty = not (row and row[0])
+
+        # Migrate old state formats and fill new keys.
         if "round" not in state:
             state["round"] = 0
+            dirty = True
         if "current_page" in state:
             del state["current_page"]
             state.setdefault("next_gid", None)
-            cur.execute(
-                "UPDATE schedule_state SET state = %s WHERE job_name = %s",
-                (Json(state), job_name)
-            )
+            dirty = True
         if "next_gid" not in state:
             state["next_gid"] = None
+            dirty = True
+        if job_name.startswith("scraper-") and "done" not in state:
+            state["done"] = False
+            dirty = True
+        if job_name.startswith("callback-"):
+            if "latest_gid" not in state:
+                state["latest_gid"] = None
+                dirty = True
+            if "cutoff_gid" not in state:
+                state["cutoff_gid"] = None
+                dirty = True
+
+        if dirty:
+            # Persist migrated shape so later reads are consistent.
+            cur.execute(
+                "INSERT INTO schedule_state (job_name, state, last_run_at) VALUES (%s, %s, NOW()) "
+                "ON CONFLICT (job_name) DO UPDATE SET state = EXCLUDED.state",
+                (job_name, Json(state)),
+            )
         return state
 
 
@@ -167,18 +185,72 @@ def save_state(job_name, state):
 
 
 def ensure_job_row(job_name):
-    """callback- 行在旧 DB 可能不存在，按需插入。"""
+    """旧 DB 可能缺行；按默认状态补齐。"""
     with db.get_cursor() as (cur, conn):
         cur.execute(
             "INSERT INTO schedule_state (job_name, state) VALUES (%s, %s) ON CONFLICT DO NOTHING",
-            (job_name, Json({"next_gid": None, "round": 0}))
+            (job_name, Json(_default_state(job_name)))
         )
 
 
 def get_gallery_meta(gid):
     with db.get_cursor() as (cur, conn):
-        cur.execute("SELECT fav_count, rating, pages FROM eh_galleries WHERE gid = %s", (gid,))
-        return cur.fetchone()
+        cur.execute("SELECT fav_count, rating, tags FROM eh_galleries WHERE gid = %s", (gid,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        fav_count, rating, tags = row
+        return {
+            "fav_count": int(fav_count or 0),
+            "rating": float(rating) if rating is not None else None,
+            "tag_count": count_detail_tags(tags),
+        }
+
+
+def count_detail_tags(tags_obj) -> int:
+    if not isinstance(tags_obj, dict):
+        return 0
+    total = 0
+    for values in tags_obj.values():
+        if isinstance(values, (list, tuple)):
+            total += len(values)
+    return total
+
+
+def bucket_rating(value: float | None) -> float | None:
+    if value is None:
+        return None
+    return round(value * 2.0) / 2.0
+
+
+def should_refresh_from_list(existing: dict, item: GalleryListItem) -> tuple[bool, list[str]]:
+    reasons: list[str] = []
+
+    if item.visible_tag_count != existing["tag_count"]:
+        reasons.append(f"tags:{existing['tag_count']}->{item.visible_tag_count}")
+
+    detail_bucket = bucket_rating(existing["rating"])
+    list_bucket = bucket_rating(item.rating_est)
+
+    if detail_bucket is None and list_bucket is not None:
+        reasons.append(f"rating:none->{list_bucket:.1f}")
+    elif detail_bucket is not None and list_bucket is not None:
+        diff = abs(detail_bucket - list_bucket)
+        if diff >= config.CALLBACK_RATING_DIFF_THRESHOLD:
+            reasons.append(f"rating:{detail_bucket:.1f}->{list_bucket:.1f}")
+
+    return bool(reasons), reasons
+
+
+def build_jobs_for_cycle() -> list[str]:
+    jobs = [f"callback-{c.lower()}" for c in CATEGORIES]
+    for category in CATEGORIES:
+        scraper_job = f"scraper-{category.lower()}"
+        scraper_state = get_state(scraper_job)
+        if not scraper_state.get("done", False):
+            jobs.append(scraper_job)
+    random.shuffle(jobs)
+    return jobs
 
 def build_upsert_row(gid, token, detail):
     return (
@@ -199,13 +271,14 @@ def build_upsert_row(gid, token, detail):
     )
 
 async def run_loop():
-    logger.info("Starting endless loop (dual-track: scraper- full + callback- incremental)...")
+    logger.info("Starting loop (scraper backfill + callback incremental)...")
 
     if any("YOUR_" in v for v in config.COOKIES.values()):
         logger.warning("Default cookies detected in .env! Please update EX_COOKIES with real values.")
 
-    # 确保 callback- 行存在（旧 DB 迁移兼容）
+    # 兼容旧 DB：确保 scraper-/callback- 行都存在。
     for cat in CATEGORIES:
+        ensure_job_row(f"scraper-{cat.lower()}")
         ensure_job_row(f"callback-{cat.lower()}")
 
     async with AsyncSession(
@@ -225,8 +298,11 @@ async def run_loop():
         asyncio.create_task(run_thumb_loop())
 
         while True:
-            jobs = ALL_JOBS[:]
-            random.shuffle(jobs)
+            jobs = build_jobs_for_cycle()
+            if not jobs:
+                logger.warning("No jobs available in current cycle, sleeping 5s.")
+                await asyncio.sleep(5)
+                continue
 
             for job_name in jobs:
                 is_callback = job_name.startswith("callback-")
@@ -243,6 +319,9 @@ async def run_loop():
 # ---------------------------------------------------------------------------
 async def _run_scraper_job(client: AsyncSession, job_name: str, category: str):
     state = get_state(job_name)
+    if state.get("done", False):
+        return
+
     next_gid = state.get("next_gid")
     round_num = state.get("round", 0)
 
@@ -255,60 +334,57 @@ async def _run_scraper_job(client: AsyncSession, job_name: str, category: str):
     items, next_cursor = result
 
     if not items:
-        # 到达最后一页，重置开始新一轮
+        # 无结果视为分类回填已结束，标记 done。
         next_round = round_num + 1
-        logger.info(f"[SCRAPER] {category} 全量完毕，round {round_num}→{next_round}，重置游标。")
-        save_state(job_name, {"next_gid": None, "round": next_round})
+        logger.info(f"[SCRAPER] {category} 全量回填结束，round {round_num}→{next_round}，停止该轨。")
+        save_state(job_name, {"next_gid": None, "round": next_round, "done": True})
         return
 
     rows_to_upsert = []
 
-    for gid, token, title in items:
-        existing = get_gallery_meta(gid)
-        should_fetch, reason = decide_fetch_full(existing)
-
-        if should_fetch:
-            detail = await fetch_detail(client, gid, token)
-            await asyncio.sleep(config.RATE_INTERVAL)
-            if detail:
-                action = "+INSERT" if not existing else "UPDATE "
-                logger.info(f"[SCRAPER] {category:<10} gid={gid} {action} fav={detail.get('fav_count')}")
-                rows_to_upsert.append(build_upsert_row(gid, token, detail))
-            else:
-                logger.warning(f"[SCRAPER] {category:<10} gid={gid} detail fetch failed")
+    for item in items:
+        existing = get_gallery_meta(item.gid)
+        detail = await fetch_detail(client, item.gid, item.token)
+        await asyncio.sleep(config.RATE_INTERVAL)
+        if detail:
+            action = "+INSERT" if not existing else "UPDATE "
+            logger.info(f"[SCRAPER] {category:<10} gid={item.gid} {action} fav={detail.get('fav_count')}")
+            rows_to_upsert.append(build_upsert_row(item.gid, item.token, detail))
+        else:
+            logger.warning(f"[SCRAPER] {category:<10} gid={item.gid} detail fetch failed")
 
     if rows_to_upsert:
         db.upsert_galleries_bulk(rows_to_upsert)
 
-    save_state(job_name, {"next_gid": next_cursor, "round": round_num})
+    save_state(job_name, {"next_gid": next_cursor, "round": round_num, "done": False})
     if next_cursor is None:
+        # 到达最后一页后不再回到第一页，直接停止 scraper- 轨。
         next_round = round_num + 1
-        logger.info(f"[SCRAPER] {category} 末页，round {round_num}→{next_round}。")
-        save_state(job_name, {"next_gid": None, "round": next_round})
+        logger.info(f"[SCRAPER] {category} 末页，round {round_num}→{next_round}，标记 done。")
+        save_state(job_name, {"next_gid": None, "round": next_round, "done": True})
 
 
 # ---------------------------------------------------------------------------
-# callback- 增量快轨：多页循环 + detail 额度机制
+# callback- 增量快轨：按游标循环追踪最新窗口
 #   - 每 turn 持有 CALLBACK_DETAIL_QUOTA 个 detail 请求额度
-#   - 连续 CALLBACK_SKIP_THRESHOLD 次无变化 → 跳过本页剩余，推进下一页
-#   - 退出条件：额度耗尽 / 追到 frontier / 到末页
+#   - 一整轮周期：从最新页追到 cutoff(latest_gid - CALLBACK_GID_WINDOW)
+#   - existing is None：立即抓 detail + 入库
+#   - existing != None：仅当 list 粗粒度信号变化时抓 detail 更新
 # ---------------------------------------------------------------------------
 async def _run_callback_job(client: AsyncSession, job_name: str, category: str):
-    scraper_job = f"scraper-{category.lower()}"
-    scraper_state = get_state(scraper_job)
-    scraper_frontier = scraper_state.get("next_gid")
-
-    # frontier=None → scraper- 未就绪或刚重置，跳过本轮
-    if scraper_frontier is None:
-        logger.info(f"[CALLBK] {category:<10} scraper- frontier=None，跳过本轮。")
-        return
-
     state = get_state(job_name)
     cursor = state.get("next_gid")       # 当前页游标
     round_num = state.get("round", 0)
+    latest_gid = state.get("latest_gid")
+    cutoff_gid = state.get("cutoff_gid")
+    if cursor is not None and (latest_gid is None or cutoff_gid is None):
+        # Legacy/incomplete state: restart from first page to re-anchor latest/cutoff.
+        logger.info(f"[CALLBK] {category:<10} state incomplete, reset cursor to first page.")
+        cursor = None
+        latest_gid = None
+        cutoff_gid = None
 
     quota = config.CALLBACK_DETAIL_QUOTA  # 本 turn 剩余 detail 额度
-    skip_threshold = config.CALLBACK_SKIP_THRESHOLD
     pages_visited = 0
     exit_reason = None
 
@@ -326,54 +402,63 @@ async def _run_callback_job(client: AsyncSession, job_name: str, category: str):
             exit_reason = "END"
             break
 
-        # 检查是否已辽及 frontier（本页游标 ≤ frontier）
-        if cursor is not None and cursor <= scraper_frontier:
-            exit_reason = "FRONTIER"
-            break
+        if latest_gid is None:
+            latest_gid = max(item.gid for item in items)
+            cutoff_gid = max(0, latest_gid - config.CALLBACK_GID_WINDOW)
+            logger.info(
+                f"[CALLBK] {category:<10} start-cycle latest={latest_gid} cutoff={cutoff_gid} "
+                f"window={config.CALLBACK_GID_WINDOW}"
+            )
 
-        consecutive_no_change = 0
-        page_skipped = False
         rows_to_upsert = []
+        inserted_count = 0
+        updated_count = 0
 
-        for gid, token, title in items:
+        for item in items:
             if quota <= 0:
                 break
 
-            existing = get_gallery_meta(gid)
-
-            # callback 只更新已有记录，新 gid 留给 scraper 发现
+            existing = get_gallery_meta(item.gid)
             if existing is None:
-                logger.debug(f"[CALLBK] {category:<10} gid={gid} SKIP_NEW (scraper 未到达)")
+                detail = await fetch_detail(client, item.gid, item.token)
+                await asyncio.sleep(config.RATE_INTERVAL)
+                quota -= 1
+                if detail:
+                    rows_to_upsert.append(build_upsert_row(item.gid, item.token, detail))
+                    inserted_count += 1
+                    logger.info(
+                        f"[CALLBK] {category:<10} gid={item.gid} +INSERT NEW (quota={quota})"
+                    )
+                else:
+                    logger.warning(f"[CALLBK] {category:<10} gid={item.gid} detail fetch failed on NEW")
                 continue
 
-            should_fetch, reason = decide_fetch_callback(
-                existing, consecutive_no_change, skip_threshold
-            )
+            should_fetch, reasons = should_refresh_from_list(existing, item)
 
             if not should_fetch:
-                logger.info(f"[CALLBK] {category:<10} 连续 {consecutive_no_change} 次无变化，跳过本页剩余。")
-                page_skipped = True
-                break
+                logger.debug(f"[CALLBK] {category:<10} gid={item.gid} SKIP coarse-match")
+                continue
 
-            detail = await fetch_detail(client, gid, token)
+            detail = await fetch_detail(client, item.gid, item.token)
             await asyncio.sleep(config.RATE_INTERVAL)
             quota -= 1
 
             if detail:
-                old_fav = existing[0]
-                new_fav = detail.get("fav_count", 0)
-                if old_fav != new_fav:
-                    logger.info(f"[CALLBK] {category:<10} gid={gid} UPDATE  fav {old_fav}→{new_fav} (quota={quota})")
-                    rows_to_upsert.append(build_upsert_row(gid, token, detail))
-                    consecutive_no_change = 0
-                else:
-                    consecutive_no_change += 1
-                    logger.info(f"[CALLBK] {category:<10} gid={gid} NO_CHNG (seq={consecutive_no_change}, quota={quota})")
+                rows_to_upsert.append(build_upsert_row(item.gid, item.token, detail))
+                updated_count += 1
+                logger.info(
+                    f"[CALLBK] {category:<10} gid={item.gid} UPDATE coarse={','.join(reasons)} "
+                    f"(quota={quota})"
+                )
             else:
-                logger.warning(f"[CALLBK] {category:<10} gid={gid} detail fetch failed")
+                logger.warning(f"[CALLBK] {category:<10} gid={item.gid} detail fetch failed")
 
         if rows_to_upsert:
             db.upsert_galleries_bulk(rows_to_upsert)
+        logger.info(
+            f"[CALLBK] {category:<10} page_done rows={len(rows_to_upsert)} "
+            f"(inserted={inserted_count}, updated={updated_count}, quota_left={quota})"
+        )
 
         # 推进游标到下一页
         cursor = next_cursor
@@ -382,23 +467,37 @@ async def _run_callback_job(client: AsyncSession, job_name: str, category: str):
         if cursor is None:
             exit_reason = "END"
             break
-        if cursor <= scraper_frontier:
-            exit_reason = "FRONTIER"
+        if cutoff_gid is not None and cursor <= cutoff_gid:
+            exit_reason = "CUTOFF"
             break
         if quota <= 0:
             exit_reason = "QUOTA"
             break
-        # page_skipped → 跳到下一页继续，不退出
 
     # 决定保存状态
-    if exit_reason in ("FRONTIER", "END"):
-        # 追上或到末页 → 重置，等下次从最新页重新追
-        logger.info(f"[CALLBK] {category} {exit_reason} → 重置游标 (pages={pages_visited}, quota_left={quota})")
-        save_state(job_name, {"next_gid": None, "round": round_num + 1})
+    if exit_reason in ("CUTOFF", "END"):
+        logger.info(
+            f"[CALLBK] {category} {exit_reason} → 完成一轮并重置游标 "
+            f"(pages={pages_visited}, quota_left={quota}, latest={latest_gid}, cutoff={cutoff_gid})"
+        )
+        save_state(
+            job_name,
+            {"next_gid": None, "round": round_num + 1, "latest_gid": None, "cutoff_gid": None},
+        )
     else:
-        # QUOTA 耗尽或网络错误 → 保存当前位置，下次继续
-        logger.info(f"[CALLBK] {category} {exit_reason or 'ERROR'} → 保存位置 cursor={cursor} (pages={pages_visited}, quota_left={quota})")
-        save_state(job_name, {"next_gid": cursor, "round": round_num})
+        logger.info(
+            f"[CALLBK] {category} {exit_reason or 'ERROR'} → 保存位置 cursor={cursor} "
+            f"(pages={pages_visited}, quota_left={quota}, latest={latest_gid}, cutoff={cutoff_gid})"
+        )
+        save_state(
+            job_name,
+            {
+                "next_gid": cursor,
+                "round": round_num,
+                "latest_gid": latest_gid,
+                "cutoff_gid": cutoff_gid,
+            },
+        )
 
 
 # ---------------------------------------------------------------------------

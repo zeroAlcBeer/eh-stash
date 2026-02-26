@@ -24,8 +24,6 @@ services:
       postgres:
         condition: service_healthy
     env_file: .env
-    environment:
-      THUMB_RATE_INTERVAL: ${THUMB_RATE_INTERVAL:-1.0}
     restart: unless-stopped
     volumes:
       - ./scraper:/app
@@ -39,8 +37,6 @@ services:
     ports:
       - "3000:3000"
     env_file: .env
-    environment:
-      TAG_BLACKLIST: "male:males only,male:yaoi,female:amputee,female:futanari"
     restart: unless-stopped
     volumes:
       - ./api:/app
