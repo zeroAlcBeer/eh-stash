@@ -1,6 +1,11 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Dict, Any, Literal
 from datetime import datetime
+
+VALID_CATEGORIES = [
+    "Misc", "Doujinshi", "Manga", "Artist CG", "Game CG",
+    "Image Set", "Cosplay", "Asian Porn", "Non-H", "Western",
+]
 
 class Gallery(BaseModel):
     gid: int
@@ -40,6 +45,15 @@ class SyncTaskCreate(BaseModel):
     category: str
     config: Dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("category")
+    @classmethod
+    def category_must_be_valid(cls, v: str) -> str:
+        if v not in VALID_CATEGORIES:
+            raise ValueError(
+                f"Invalid category '{v}'. Must be one of: {', '.join(VALID_CATEGORIES)}"
+            )
+        return v
+
 
 class SyncTaskUpdate(BaseModel):
     name: Optional[str] = None
@@ -66,4 +80,4 @@ class ThumbQueueStats(BaseModel):
     pending: int
     processing: int
     done: int
-    failed: int
+    waiting: int

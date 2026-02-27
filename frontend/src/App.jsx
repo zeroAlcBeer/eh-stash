@@ -1,45 +1,48 @@
 import React from 'react';
 import GalleryPage from './pages/GalleryPage';
 import AdminPage from './pages/AdminPage';
-import { Box, AppBar, Toolbar, Typography, Container, Button, Stack } from '@mui/material';
 import { BrowserRouter, NavLink, Route, Routes } from 'react-router-dom';
 
 function App() {
   return (
     <BrowserRouter>
-      <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
-        <AppBar position="static" color="default" elevation={0} sx={{ borderBottom: '1px solid #333' }}>
-          <Toolbar>
-            <Typography variant="h6" component="div" sx={{ flexGrow: 1, fontWeight: 'bold' }}>
-              EH-Stash
-            </Typography>
-            <Stack direction="row" spacing={1}>
-              <Button
-                component={NavLink}
+      <div className="min-h-screen bg-zinc-950 text-gray-100 flex flex-col">
+        {/* Nav */}
+        <header className="sticky top-0 z-40 border-b border-white/10 bg-zinc-950/80 backdrop-blur-md">
+          <div className="max-w-screen-2xl mx-auto px-4 h-12 flex items-center justify-between">
+            <span className="font-bold tracking-tight text-white">EH-Stash</span>
+            <nav className="flex gap-1">
+              <NavLink
                 to="/"
-                color="inherit"
-                sx={{ '&.active': { textDecoration: 'underline' } }}
+                end
+                className={({ isActive }) =>
+                  `px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${isActive ? 'bg-white/10 text-white' : 'text-gray-400 hover:text-white hover:bg-white/5'
+                  }`
+                }
               >
                 Gallery
-              </Button>
-              <Button
-                component={NavLink}
+              </NavLink>
+              <NavLink
                 to="/admin"
-                color="inherit"
-                sx={{ '&.active': { textDecoration: 'underline' } }}
+                className={({ isActive }) =>
+                  `px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${isActive ? 'bg-white/10 text-white' : 'text-gray-400 hover:text-white hover:bg-white/5'
+                  }`
+                }
               >
                 Admin
-              </Button>
-            </Stack>
-          </Toolbar>
-        </AppBar>
-        <Container maxWidth="xl" sx={{ mt: 4, flexGrow: 1 }}>
+              </NavLink>
+            </nav>
+          </div>
+        </header>
+
+        {/* Main */}
+        <main className="flex-1 max-w-screen-2xl mx-auto w-full px-4 pt-4">
           <Routes>
             <Route path="/" element={<GalleryPage />} />
             <Route path="/admin" element={<AdminPage />} />
           </Routes>
-        </Container>
-      </Box>
+        </main>
+      </div>
     </BrowserRouter>
   );
 }

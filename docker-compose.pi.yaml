@@ -12,11 +12,8 @@ services:
     volumes:
       - /opt/eh-stash/db:/var/lib/postgresql/data
       - /opt/eh-stash/migrations:/docker-entrypoint-initdb.d
-    # 不对宿主机暴露端口，仅内部网络可达
-    expose:
-      - "5432"
-    networks:
-      - internal
+    ports:
+      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d eh_stash"]
       interval: 10s
@@ -33,12 +30,12 @@ services:
       DATABASE_URL: ${DATABASE_URL}
       EX_COOKIES: ${EX_COOKIES}
       EX_BASE_URL: ${EX_BASE_URL:-https://exhentai.org}
-      THUMB_RATE_INTERVAL: ${THUMB_RATE_INTERVAL:-1.0}
+      RATE_INTERVAL: ${RATE_INTERVAL:-2.0}
+      THUMB_RATE_INTERVAL: ${THUMB_RATE_INTERVAL:-0.5}
+      PROXY_URL: ${PROXY_URL:-}
       THUMB_DIR: /data/thumbs
     volumes:
       - /opt/eh-stash/thumbs:/data/thumbs
-    networks:
-      - internal
     restart: unless-stopped
 
   api:
@@ -54,8 +51,6 @@ services:
       THUMB_DIR: /data/thumbs
     volumes:
       - /opt/eh-stash/thumbs:/data/thumbs
-    networks:
-      - internal
     restart: unless-stopped
 
   frontend:
@@ -64,10 +59,4 @@ services:
       - api
     ports:
       - "4173:4173"   # 宿主 4173 → 容器内 vite preview 4173
-    networks:
-      - internal
     restart: unless-stopped
-
-networks:
-  internal:
-    driver: bridge

@@ -14,13 +14,11 @@ from models import (
 router = APIRouter(prefix="/v1/admin", tags=["admin"])
 
 DEFAULT_FULL_CONFIG = {
-    "rate_interval": 1.0,
     "inline_set": "dm_l",
     "start_gid": None,
 }
 
 DEFAULT_INCREMENTAL_CONFIG = {
-    "rate_interval": 1.0,
     "inline_set": "dm_l",
     "detail_quota": 25,
     "gid_window": 10000,
@@ -35,6 +33,7 @@ def _init_state(task_type: str, cfg: Dict[str, Any]) -> Dict[str, Any]:
             "round": 0,
             "done": False,
             "anchor_gid": None,
+            "total_count": None,
         }
     return {
         "next_gid": None,
@@ -47,7 +46,8 @@ def _init_state(task_type: str, cfg: Dict[str, Any]) -> Dict[str, Any]:
 def _normalize_config(task_type: str, config: Dict[str, Any]) -> Dict[str, Any]:
     base = DEFAULT_FULL_CONFIG if task_type == "full" else DEFAULT_INCREMENTAL_CONFIG
     merged = dict(base)
-    merged.update(config or {})
+    merged.update({k: v for k, v in (config or {}).items() if k != "inline_set"})
+    merged["inline_set"] = "dm_l"  # 始终写死，不允许覆盖
     return merged
 
 
@@ -169,10 +169,10 @@ def thumb_queue_stats(db=Depends(get_db)):
     db.execute(
         """
         SELECT
-            COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) AS pending,
+            COALESCE(SUM(CASE WHEN status = 'pending' AND (next_retry_at IS NULL OR next_retry_at <= NOW()) THEN 1 ELSE 0 END), 0) AS pending,
             COALESCE(SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END), 0) AS processing,
             COALESCE(SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END), 0) AS done,
-            COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS failed
+            COALESCE(SUM(CASE WHEN status = 'pending' AND next_retry_at > NOW() THEN 1 ELSE 0 END), 0) AS waiting
         FROM thumb_queue
         """
     )
@@ -181,5 +181,5 @@ def thumb_queue_stats(db=Depends(get_db)):
         pending=row[0],
         processing=row[1],
         done=row[2],
-        failed=row[3],
+        waiting=row[3],
     )

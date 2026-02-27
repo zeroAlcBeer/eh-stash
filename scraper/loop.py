@@ -1,6 +1,8 @@
 import asyncio
 import logging
+import re
 import sys
+import time
 from pathlib import Path
 
 from curl_cffi.requests import AsyncSession
@@ -26,18 +28,82 @@ _CATEGORY_BITS = {
     "Non-H": 256,
     "Western": 512,
 }
+VALID_CATEGORIES = set(_CATEGORY_BITS.keys())
 
 SCHEDULER_POLL_INTERVAL = 3
 THUMB_IDLE_SLEEP = 5
+WARMUP_DELAY = 30  # 启动后等待秒数再开始调度任务
+
+# ── 全局 IP ban 屏障 ─────────────────────────────────────────────────────────
+_ban_until: float = 0.0  # wall-clock timestamp, 0 = 无 ban
+_ban_lock = asyncio.Lock() if hasattr(asyncio, 'Lock') else None  # 延迟初始化
+
+_BAN_RE = re.compile(
+    r"ban expires in\s+(?:(\d+)\s*hours?)?\s*,?\s*(?:(\d+)\s*minutes?)?\s*(?:and\s+)?(?:(\d+)\s*seconds?)?",
+    re.IGNORECASE,
+)
+
+
+def _parse_ban_seconds(text: str) -> int:
+    """从 ban 页面 HTML 解析剩余秒数，解析失败默认 300s (5min)"""
+    m = _BAN_RE.search(text)
+    if not m:
+        return 300
+    hours = int(m.group(1) or 0)
+    mins = int(m.group(2) or 0)
+    secs = int(m.group(3) or 0)
+    total = hours * 3600 + mins * 60 + secs
+    return total if total > 0 else 300
+
+
+async def _set_ban(seconds: int):
+    """设置全局 ban 屏障，所有主站请求将阻塞到 ban 解除"""
+    global _ban_until
+    _ban_until = time.time() + seconds
+    logger.warning(f"[BAN  ] IP banned, all main-site requests paused for {seconds}s (until {time.strftime('%H:%M:%S', time.localtime(_ban_until))})")
+
+
+async def _wait_if_banned():
+    """如果当前处于 ban 状态，阻塞等待直到 ban 解除"""
+    global _ban_until
+    if _ban_until <= 0:
+        return
+    remaining = _ban_until - time.time()
+    if remaining > 0:
+        logger.info(f"[BAN  ] waiting {remaining:.0f}s for ban to expire...")
+        await asyncio.sleep(remaining)
+        logger.info("[BAN  ] ban expired, resuming requests")
+    _ban_until = 0.0
+
+
+class GlobalRateLimiter:
+    """全局速率限制器：保证所有 HTTP 请求之间至少间隔 interval 秒，跨任务共享"""
+
+    def __init__(self, interval: float):
+        self._interval = interval
+        self._lock = asyncio.Lock()
+        self._last_time = 0.0
+
+    async def acquire(self):
+        # 先等 ban 解除
+        await _wait_if_banned()
+        async with self._lock:
+            now = asyncio.get_event_loop().time()
+            wait = self._interval - (now - self._last_time)
+            if wait > 0:
+                await asyncio.sleep(wait)
+            self._last_time = asyncio.get_event_loop().time()
+
+
+_rate_limiter: GlobalRateLimiter | None = None
+_thumb_rate_limiter: GlobalRateLimiter | None = None
 
 DEFAULT_FULL_CONFIG = {
-    "rate_interval": 1.0,
     "inline_set": "dm_l",
     "start_gid": None,
 }
 
 DEFAULT_INCREMENTAL_CONFIG = {
-    "rate_interval": 1.0,
     "inline_set": "dm_l",
     "detail_quota": 25,
     "gid_window": 10000,
@@ -52,6 +118,7 @@ def init_state(task_type: str, task_config: dict) -> dict:
             "round": 0,
             "done": False,
             "anchor_gid": None,
+            "total_count": None,
         }
     return {
         "next_gid": None,
@@ -63,18 +130,16 @@ def init_state(task_type: str, task_config: dict) -> dict:
 
 def normalize_full_config(raw: dict | None) -> dict:
     cfg = dict(DEFAULT_FULL_CONFIG)
-    cfg.update(raw or {})
-    cfg["rate_interval"] = float(cfg.get("rate_interval") or 1.0)
-    cfg["inline_set"] = str(cfg.get("inline_set") or "dm_l")
+    cfg.update({k: v for k, v in (raw or {}).items() if k != "inline_set"})
+    cfg["inline_set"] = "dm_l"  # 始终写死
     cfg["start_gid"] = cfg.get("start_gid")
     return cfg
 
 
 def normalize_incremental_config(raw: dict | None) -> dict:
     cfg = dict(DEFAULT_INCREMENTAL_CONFIG)
-    cfg.update(raw or {})
-    cfg["rate_interval"] = float(cfg.get("rate_interval") or 1.0)
-    cfg["inline_set"] = str(cfg.get("inline_set") or "dm_l")
+    cfg.update({k: v for k, v in (raw or {}).items() if k != "inline_set"})
+    cfg["inline_set"] = "dm_l"  # 始终写死
     cfg["detail_quota"] = int(cfg.get("detail_quota") or 25)
     cfg["gid_window"] = int(cfg.get("gid_window") or 10000)
     cfg["rating_diff_threshold"] = float(cfg.get("rating_diff_threshold") or 0.5)
@@ -97,13 +162,17 @@ def clamp_progress(value: float) -> float:
     return max(0.0, min(100.0, value))
 
 
-def calc_full_progress(anchor_gid: int | None, cursor_gid: int | None, done: bool) -> float:
+def calc_full_progress(
+    db_count: int,
+    total_count: int | None,
+    done: bool,
+) -> float:
+    """用「DB 已入库条数 / 列表页 Found about N 总数」精确计算进度"""
     if done:
         return 100.0
-    if not anchor_gid or anchor_gid <= 0 or cursor_gid is None:
+    if not total_count or total_count <= 0:
         return 0.0
-    pct = ((anchor_gid - cursor_gid) / anchor_gid) * 100
-    return clamp_progress(pct)
+    return clamp_progress(db_count / total_count * 100)
 
 
 def calc_incremental_progress(latest_gid: int | None, cutoff_gid: int | None, cursor_gid: int | None) -> float:
@@ -120,32 +189,43 @@ async def validate_access(client: AsyncSession) -> bool:
     url = config.EX_BASE_URL
     logger.info(f"Validating access to {url} ...")
 
-    try:
-        resp = await client.get(url, timeout=30)
-        if resp.status_code != 200:
-            logger.error(f"Access check failed: HTTP {resp.status_code}")
+    while True:
+        try:
+            resp = await client.get(url, timeout=30)
+            if resp.status_code != 200:
+                logger.error(f"Access check failed: HTTP {resp.status_code}")
+                return False
+
+            if "panda.png" in resp.text or "Sad Panda" in resp.text:
+                logger.critical("ACCESS DENIED: Sad Panda detected. Check EX_COOKIES.")
+                return False
+
+            if "This page requires you to log on" in resp.text or "You must be logged in" in resp.text:
+                logger.critical("ACCESS DENIED: Login required. Check EX_COOKIES.")
+                return False
+
+            if "temporarily banned" in resp.text or "IP address has been" in resp.text:
+                ban_secs = _parse_ban_seconds(resp.text)
+                logger.warning(
+                    f"[BAN  ] IP banned during startup, waiting {ban_secs}s "
+                    f"(until {time.strftime('%H:%M:%S', time.localtime(time.time() + ban_secs))})"
+                )
+                await asyncio.sleep(ban_secs)
+                logger.info("[BAN  ] ban expired, retrying access check...")
+                continue
+
+            has_nav = 'id="nb"' in resp.text
+            has_gallery = 'class="itg"' in resp.text or "itg glte" in resp.text or "itg gltc" in resp.text
+
+            if not has_nav and not has_gallery:
+                logger.critical("ACCESS DENIED: No navigation or gallery found. Cookies likely invalid.")
+                return False
+
+            logger.info("Access check passed.")
+            return True
+        except Exception as e:
+            logger.error(f"Access check failed with exception: {e}")
             return False
-
-        if "panda.png" in resp.text or "Sad Panda" in resp.text:
-            logger.critical("ACCESS DENIED: Sad Panda detected. Check EX_COOKIES.")
-            return False
-
-        if "This page requires you to log on" in resp.text or "You must be logged in" in resp.text:
-            logger.critical("ACCESS DENIED: Login required. Check EX_COOKIES.")
-            return False
-
-        has_nav = 'id="nb"' in resp.text
-        has_gallery = 'class="itg"' in resp.text or "itg glte" in resp.text or "itg gltc" in resp.text
-
-        if not has_nav and not has_gallery:
-            logger.critical("ACCESS DENIED: No navigation or gallery found. Cookies likely invalid.")
-            return False
-
-        logger.info("Access check passed.")
-        return True
-    except Exception as e:
-        logger.error(f"Access check failed with exception: {e}")
-        return False
 
 
 async def fetch_list_page(
@@ -154,12 +234,14 @@ async def fetch_list_page(
     inline_set: str,
     next_gid: int | None = None,
 ):
-    fcats = _ALL_CATS - _CATEGORY_BITS.get(category, 0)
+    fcats = _ALL_CATS - _CATEGORY_BITS[category]
     url = f"{config.EX_BASE_URL}/?f_cats={fcats}&inline_set={inline_set}"
     if next_gid is not None:
         url += f"&next={next_gid}"
 
     try:
+        await _rate_limiter.acquire()
+        logger.info(f"[LIST ] GET {url}")
         resp = await client.get(url, timeout=30)
         if resp.status_code != 200:
             logger.warning(f"[LIST ] {category:<10} HTTP {resp.status_code}")
@@ -173,7 +255,13 @@ async def fetch_list_page(
             logger.error("Login required while fetching list page.")
             return None
 
-        return parse_gallery_list(resp.text)
+        if "temporarily banned" in resp.text or "IP address has been" in resp.text:
+            ban_secs = _parse_ban_seconds(resp.text)
+            await _set_ban(ban_secs)
+            return "BANNED"
+
+        items, next_gid, total_count = parse_gallery_list(resp.text)
+        return items, next_gid, total_count
     except Exception as e:
         logger.error(f"[LIST ] {category:<10} fetch error: {e}")
         return None
@@ -182,10 +270,16 @@ async def fetch_list_page(
 async def fetch_detail(client: AsyncSession, gid: int, token: str):
     url = f"{config.EX_BASE_URL}/g/{gid}/{token}/"
     try:
+        await _rate_limiter.acquire()
+        logger.info(f"[DETAIL] GET {url}")
         resp = await client.get(url, timeout=30)
         if resp.status_code != 200:
             logger.warning(f"[DETAIL] gid={gid} HTTP {resp.status_code}")
             return None
+        if "temporarily banned" in resp.text or "IP address has been" in resp.text:
+            ban_secs = _parse_ban_seconds(resp.text)
+            await _set_ban(ban_secs)
+            return "BANNED"
         return parse_detail(resp.text)
     except Exception as e:
         logger.error(f"[DETAIL] gid={gid} fetch error: {e}")
@@ -275,10 +369,11 @@ async def run_full_once(client: AsyncSession, task_id: int, runtime: dict) -> bo
     category = runtime["category"]
     next_gid = state.get("next_gid")
 
+    logger.info(f"[FULL ] id={task_id} category={category} fetching next_gid={next_gid}")
     result = await fetch_list_page(client, category, cfg["inline_set"], next_gid)
-    await asyncio.sleep(cfg["rate_interval"])
 
     if result is None:
+        logger.warning(f"[FULL ] id={task_id} fetch_list_page failed, will retry next loop")
         db.update_task_runtime(
             task_id,
             state=state,
@@ -289,17 +384,52 @@ async def run_full_once(client: AsyncSession, task_id: int, runtime: dict) -> bo
         )
         return False
 
-    items, next_cursor = result
+    if result == "BANNED":
+        ban_msg = "IP temporarily banned by ExHentai, will retry when ban expires"
+        logger.warning(f"[FULL ] id={task_id} {ban_msg}")
+        db.update_task_runtime(
+            task_id,
+            state=state,
+            status="running",
+            progress_pct=runtime.get("progress_pct") or 0.0,
+            error_message=ban_msg,
+            touch_run_time=False,
+        )
+        return False
+
+    items, next_cursor, total_count = result
 
     if items and state.get("anchor_gid") is None:
         state["anchor_gid"] = max(item.gid for item in items)
 
+    # 首次或每页都更新 total_count（取最大值以免估计值缩水）
+    if total_count:
+        state["total_count"] = max(total_count, state.get("total_count") or 0) or total_count
+
+    logger.info(
+        f"[FULL ] id={task_id} category={category} page_items={len(items)}"
+        f" next_gid={next_cursor} total_count={state.get('total_count')}"
+    )
+
     rows_to_upsert = []
     for item in items:
         detail = await fetch_detail(client, item.gid, item.token)
-        await asyncio.sleep(cfg["rate_interval"])
+        if detail == "BANNED":
+            ban_msg = "IP temporarily banned by ExHentai, will retry when ban expires"
+            logger.warning(f"[FULL ] id={task_id} gid={item.gid} {ban_msg}")
+            db.update_task_runtime(
+                task_id,
+                state=state,
+                status="running",
+                progress_pct=runtime.get("progress_pct") or 0.0,
+                error_message=ban_msg,
+                touch_run_time=False,
+            )
+            return False
         if detail:
             rows_to_upsert.append(build_upsert_row(item.gid, item.token, detail))
+        else:
+            logger.warning(f"[FULL ] id={task_id} gid={item.gid} detail fetch failed, skipping")
 
     if rows_to_upsert:
         db.upsert_galleries_bulk(rows_to_upsert)
@@ -322,12 +452,22 @@ async def run_full_once(client: AsyncSession, task_id: int, runtime: dict) -> bo
             touch_run_time=True,
         )
         db.set_task_desired_status(task_id, "stopped")
-        logger.info(f"[TASK ] id={task_id} full task completed")
+        logger.info(f"[FULL ] id={task_id} completed round={round_num + 1}")
         return True
 
     state["next_gid"] = next_cursor
     state["done"] = False
-    progress_pct = calc_full_progress(state.get("anchor_gid"), next_cursor, False)
+    db_count = db.count_galleries_by_category(category)
+    state["db_count"] = db_count
+    progress_pct = calc_full_progress(
+        db_count=db_count,
+        total_count=state.get("total_count"),
+        done=False,
+    )
+    logger.info(
+        f"[FULL ] id={task_id} upserted={len(rows_to_upsert)}"
+        f" db_count={db_count} progress={progress_pct:.2f}%"
+    )
 
     db.update_task_runtime(
         task_id,
@@ -380,18 +520,22 @@ async def run_incremental_once(client: AsyncSession, task_id: int, runtime: dict
             return True
 
         page_cfg = normalize_incremental_config(runtime_now.get("config"))
-        rate_interval = page_cfg["rate_interval"]
         inline_set = page_cfg["inline_set"]
         rating_threshold = page_cfg["rating_diff_threshold"]
 
         result = await fetch_list_page(client, category, inline_set, cursor)
-        await asyncio.sleep(rate_interval)
 
         if result is None:
+            logger.warning(f"[INCR ] id={task_id} fetch_list_page failed, cursor={cursor}")
             exit_reason = "ERROR"
             break
 
-        items, next_cursor = result
+        if result == "BANNED":
+            logger.warning(f"[INCR ] id={task_id} IP banned, cursor={cursor}")
+            exit_reason = "BANNED"
+            break
+
+        items, next_cursor, _ = result
         if not items:
             exit_reason = "END"
             break
@@ -400,8 +544,13 @@ async def run_incremental_once(client: AsyncSession, task_id: int, runtime: dict
             latest_gid = max(item.gid for item in items)
             cutoff_gid = max(0, latest_gid - cycle_gid_window)
             logger.info(
-                f"[TASK ] id={task_id} incremental cycle latest={latest_gid} cutoff={cutoff_gid}"
+                f"[INCR ] id={task_id} cycle start category={category}"
+                f" latest={latest_gid} cutoff={cutoff_gid}"
             )
+
+        logger.debug(
+            f"[INCR ] id={task_id} page cursor={cursor} items={len(items)} quota_left={quota}"
+        )
 
         rows_to_upsert = []
         for item in items:
@@ -411,8 +560,12 @@ async def run_incremental_once(client: AsyncSession, task_id: int, runtime: dict
             existing = get_gallery_meta(item.gid)
             if existing is None:
                 detail = await fetch_detail(client, item.gid, item.token)
-                await asyncio.sleep(rate_interval)
                 quota -= 1
+                if detail == "BANNED":
+                    logger.warning(f"[INCR ] id={task_id} gid={item.gid} IP banned")
+                    exit_reason = "BANNED"
+                    quota = 0
+                    break
                 if detail:
                     rows_to_upsert.append(build_upsert_row(item.gid, item.token, detail))
                 continue
@@ -422,8 +575,12 @@ async def run_incremental_once(client: AsyncSession, task_id: int, runtime: dict
                 continue
 
             detail = await fetch_detail(client, item.gid, item.token)
-            await asyncio.sleep(rate_interval)
             quota -= 1
+            if detail == "BANNED":
+                logger.warning(f"[INCR ] id={task_id} gid={item.gid} IP banned")
+                exit_reason = "BANNED"
+                quota = 0
+                break
             if detail:
                 rows_to_upsert.append(build_upsert_row(item.gid, item.token, detail))
 
@@ -432,6 +589,10 @@ async def run_incremental_once(client: AsyncSession, task_id: int, runtime: dict
 
         cursor = next_cursor
         progress_pct = calc_incremental_progress(latest_gid, cutoff_gid, cursor)
+        logger.info(
+            f"[INCR ] id={task_id} upserted={len(rows_to_upsert)}"
+            f" quota_left={quota} progress={progress_pct:.1f}%"
+        )
 
         if cursor is None:
             exit_reason = "END"
@@ -439,6 +600,8 @@ async def run_incremental_once(client: AsyncSession, task_id: int, runtime: dict
         if cutoff_gid is not None and cursor <= cutoff_gid:
             exit_reason = "CUTOFF"
             break
+
+    logger.info(f"[INCR ] id={task_id} exit_reason={exit_reason} round={round_num}")
 
     if exit_reason in ("END", "CUTOFF"):
         new_state = {
@@ -461,13 +624,14 @@ async def run_incremental_once(client: AsyncSession, task_id: int, runtime: dict
     state["round"] = round_num
     state["latest_gid"] = latest_gid
     state["cutoff_gid"] = cutoff_gid
+    ban_msg = "IP temporarily banned by ExHentai, will retry when ban expires"
     db.update_task_runtime(
         task_id,
         state=state,
         progress_pct=progress_pct,
         status="running",
-        error_message="" if exit_reason != "ERROR" else "incremental fetch error",
-        touch_run_time=True,
+        error_message=ban_msg if exit_reason == "BANNED" else ("incremental fetch error" if exit_reason == "ERROR" else ""),
+        touch_run_time=exit_reason != "BANNED",
     )
     return False
 
@@ -486,6 +650,15 @@ async def run_task(client: AsyncSession, task_id: int):
                 if runtime["status"] not in ("completed", "error"):
                     db.update_task_runtime(task_id, status="stopped", touch_run_time=True)
                 logger.info(f"[TASK ] id={task_id} stop requested")
+                return
+
+            # 校验 category 合法性
+            category = runtime.get("category", "")
+            if category not in VALID_CATEGORIES:
+                msg = f"category '{category}' is not a valid ExHentai category. Valid: {sorted(VALID_CATEGORIES)}"
+                logger.error(f"[TASK ] id={task_id} {msg}")
+                db.update_task_runtime(task_id, status="error", error_message=msg, touch_run_time=True)
+                db.set_task_desired_status(task_id, "stopped")
                 return
 
             db.update_task_runtime(task_id, status="running", error_message="", touch_run_time=True)
@@ -519,6 +692,7 @@ async def run_thumb_worker():
         timeout=15,
         impersonate="chrome",
         verify=False,
+        proxies=config.PROXIES,
     ) as client:
         while True:
             try:
@@ -532,6 +706,7 @@ async def run_thumb_worker():
                 thumb_url = item["thumb_url"]
 
                 try:
+                    await _thumb_rate_limiter.acquire()
                     resp = await client.get(
                         thumb_url,
                         timeout=15,
@@ -549,7 +724,6 @@ async def run_thumb_worker():
                     retry_info = db.mark_thumb_queue_failed(item_id)
                     logger.warning(f"[THUMB] gid={gid} download error={e}, retry={retry_info}")
 
-                await asyncio.sleep(config.THUMB_RATE_INTERVAL)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -563,6 +737,15 @@ async def run_loop():
     if any("YOUR_" in v for v in config.COOKIES.values()):
         logger.warning("Default cookies detected in .env, update EX_COOKIES.")
 
+    global _rate_limiter, _thumb_rate_limiter
+    _rate_limiter = GlobalRateLimiter(config.RATE_INTERVAL)
+    _thumb_rate_limiter = GlobalRateLimiter(config.THUMB_RATE_INTERVAL)
+    logger.info(f"Global rate limiter: main={config.RATE_INTERVAL}s/req  thumb={config.THUMB_RATE_INTERVAL}s/req")
+    if config.PROXY_URL:
+        logger.info(f"Proxy enabled: {config.PROXY_URL}")
+    else:
+        logger.info("Proxy disabled (PROXY_URL not set)")
+
     running_tasks: dict[int, asyncio.Task] = {}
 
     async with AsyncSession(
@@ -572,12 +755,17 @@ async def run_loop():
         timeout=30,
         impersonate="chrome",
         verify=False,
+        proxies=config.PROXIES,
     ) as client:
         if not await validate_access(client):
             logger.critical("Startup validation failed. Exiting.")
             sys.exit(1)
 
         thumb_task = asyncio.create_task(run_thumb_worker(), name="thumb-worker")
+
+        logger.info(f"[SCHED] warmup: waiting {WARMUP_DELAY}s before starting task scheduler...")
+        await asyncio.sleep(WARMUP_DELAY)
+        logger.info("[SCHED] warmup complete, starting task scheduler")
 
         try:
             while True:

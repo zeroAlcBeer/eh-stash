@@ -23,9 +23,18 @@ if EX_COOKIES_STR:
             k, v = pair.split("=", 1)
             COOKIES[k.strip()] = v.strip()
 
+# Proxy (optional — set if your IP is banned)
+PROXY_URL = os.getenv("PROXY_URL", "")
+PROXIES = {"http": PROXY_URL, "https": PROXY_URL} if PROXY_URL else None
+
 # Thumb downloader
 THUMB_DIR = os.getenv("THUMB_DIR", "/data/thumbs")
-THUMB_RATE_INTERVAL = float(os.getenv("THUMB_RATE_INTERVAL", "1.0"))
+
+# 全局请求速率限制（主站 list/detail，单位：秒/请求）
+RATE_INTERVAL = float(os.getenv("RATE_INTERVAL", "2.0"))
+
+# Thumb 下载速率限制（图片 CDN，单位：秒/请求，独立限速）
+THUMB_RATE_INTERVAL = float(os.getenv("THUMB_RATE_INTERVAL", "0.5"))
 
 HEADERS = {
     "User-Agent": (

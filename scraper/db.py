@@ -95,6 +95,16 @@ def upsert_galleries_bulk(rows: list[tuple]) -> int:
     return len(rows)
 
 
+def count_galleries_by_category(category: str) -> int:
+    with get_cursor() as (cur, _):
+        cur.execute(
+            "SELECT COUNT(*) FROM eh_galleries WHERE LOWER(category) = LOWER(%s)",
+            (category,),
+        )
+        row = cur.fetchone()
+        return int(row[0]) if row else 0
+
+
 def list_sync_tasks() -> list[dict]:
     with get_cursor() as (cur, _):
         cur.execute("SELECT * FROM sync_tasks ORDER BY id ASC")
@@ -184,6 +194,7 @@ def claim_next_thumb_queue_item() -> dict | None:
                 SELECT id
                 FROM thumb_queue
                 WHERE status = 'pending'
+                  AND (next_retry_at IS NULL OR next_retry_at <= NOW())
                 ORDER BY created_at
                 LIMIT 1
                 FOR UPDATE SKIP LOCKED
@@ -216,14 +227,11 @@ def mark_thumb_queue_failed(item_id: int) -> tuple[int, str] | None:
             """
             UPDATE thumb_queue
             SET retry_count = retry_count + 1,
-                status = CASE
-                    WHEN retry_count + 1 >= 3 THEN 'failed'
-                    ELSE 'pending'
-                END,
-                processed_at = CASE
-                    WHEN retry_count + 1 >= 3 THEN NOW()
-                    ELSE NULL
-                END
+                status = 'pending',
+                processed_at = NULL,
+                next_retry_at = NOW() + (
+                    LEAST(POWER(2, retry_count + 1), 8) || ' minutes'
+                )::interval
             WHERE id = %s
             RETURNING retry_count, status
             """,

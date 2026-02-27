@@ -5,6 +5,7 @@ from bs4 import BeautifulSoup, Tag
 GID_TOKEN_RE = re.compile(r"/g/(\d+)/([a-f0-9]+)/")
 NEXT_CURSOR_RE = re.compile(r'[?&]next=(\d+)')
 RATING_RE = re.compile(r"([0-5](?:\.\d+)?)")
+TOTAL_COUNT_RE = re.compile(r"Found\s+(?:about\s+)?([\d,]+)\s+results")
 TAG_CLASS_RE = re.compile(r"^gt")
 OPACITY_RE = re.compile(r"opacity\s*:\s*([0-9.]+)")
 SPACE_RE = re.compile(r"\s+")
@@ -97,19 +98,26 @@ def _extract_visible_tags(element: Tag) -> set[str]:
     return tags
 
 
-def parse_gallery_list(html: str) -> tuple[list[GalleryListItem], int | None]:
+def parse_gallery_list(html: str) -> tuple[list[GalleryListItem], int | None, int | None]:
     """
     解析列表页 HTML
-    返回 (items, next_gid)
-      items    = [GalleryListItem(...), ...]
-      next_gid = 下一页游标 GID，None 表示已到最后一页
+    返回 (items, next_gid, total_count)
+      items       = [GalleryListItem(...), ...]
+      next_gid    = 下一页游标 GID，None 表示已到最后一页
+      total_count = "Found about N results" 中的 N，None 表示未找到
     """
     soup = BeautifulSoup(html, "lxml")
     results: list[GalleryListItem] = []
 
+    # 解析总条目数
+    total_count: int | None = None
+    m_total = TOTAL_COUNT_RE.search(html)
+    if m_total:
+        total_count = int(m_total.group(1).replace(",", ""))
+
     itg = soup.find(class_="itg")
     if not itg:
-        return results, None
+        return results, None, total_count
 
     for element in itg.find_all(recursive=False):
         glname = element.find(class_="glname")
@@ -163,7 +171,7 @@ def parse_gallery_list(html: str) -> tuple[list[GalleryListItem], int | None]:
         if m:
             next_gid = int(m.group(1))
 
-    return results, next_gid
+    return results, next_gid, total_count
 
 
 def parse_detail(html: str) -> dict:

@@ -28,8 +28,12 @@ CREATE TABLE IF NOT EXISTS thumb_queue (
                     CHECK (status IN ('pending', 'processing', 'done', 'failed')),
     retry_count     INT DEFAULT 0,
     created_at      TIMESTAMPTZ DEFAULT NOW(),
-    processed_at    TIMESTAMPTZ
+    processed_at    TIMESTAMPTZ,
+    next_retry_at   TIMESTAMPTZ
 );
 
 CREATE INDEX IF NOT EXISTS idx_thumb_queue_pending
     ON thumb_queue (created_at) WHERE status = 'pending';
+
+CREATE INDEX IF NOT EXISTS idx_thumb_queue_retry
+    ON thumb_queue (next_retry_at) WHERE status = 'pending';
