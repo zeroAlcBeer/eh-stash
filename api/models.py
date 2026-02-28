@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, model_validator
 from typing import List, Optional, Dict, Any, Literal
 from datetime import datetime
 
@@ -6,6 +6,7 @@ VALID_CATEGORIES = [
     "Misc", "Doujinshi", "Manga", "Artist CG", "Game CG",
     "Image Set", "Cosplay", "Asian Porn", "Non-H", "Western",
 ]
+MIXED_CATEGORY = "Mixed"
 
 class Gallery(BaseModel):
     gid: int
@@ -45,14 +46,41 @@ class SyncTaskCreate(BaseModel):
     category: str
     config: Dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("category")
-    @classmethod
-    def category_must_be_valid(cls, v: str) -> str:
-        if v not in VALID_CATEGORIES:
-            raise ValueError(
-                f"Invalid category '{v}'. Must be one of: {', '.join(VALID_CATEGORIES)}"
-            )
-        return v
+    @model_validator(mode="after")
+    def validate_by_task_type(self):
+        if self.type == "full":
+            if self.category not in VALID_CATEGORIES:
+                raise ValueError(
+                    f"Invalid category '{self.category}'. Must be one of: {', '.join(VALID_CATEGORIES)}"
+                )
+            return self
+
+        if self.category != MIXED_CATEGORY:
+            raise ValueError(f"Incremental task category must be '{MIXED_CATEGORY}'")
+
+        cats = self.config.get("categories")
+        if not isinstance(cats, list) or not cats:
+            raise ValueError("Incremental task requires config.categories as a non-empty list")
+
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for item in cats:
+            if not isinstance(item, str):
+                raise ValueError("config.categories must be a list of strings")
+            value = item.strip()
+            if value not in VALID_CATEGORIES:
+                raise ValueError(
+                    f"Invalid category '{value}' in config.categories. "
+                    f"Must be one of: {', '.join(VALID_CATEGORIES)}"
+                )
+            if value not in seen:
+                seen.add(value)
+                normalized.append(value)
+
+        config = dict(self.config)
+        config["categories"] = normalized
+        self.config = config
+        return self
 
 
 class SyncTaskUpdate(BaseModel):

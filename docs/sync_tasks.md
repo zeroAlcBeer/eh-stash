@@ -104,6 +104,7 @@ CREATE INDEX IF NOT EXISTS idx_thumb_queue_pending
 {
   "rate_interval": 1.0,
   "inline_set": "dm_e",
+  "categories": ["Doujinshi", "Manga", "Cosplay"], // 混合抓取分类（按站点活跃度自然分配）
 
   "scan_window": 10000,        // 每轮扫描的 item 条数
   "rating_diff_threshold": 0.5 // 粗粒度评分变化阈值
@@ -280,6 +281,18 @@ GET    /v1/admin/thumb-queue/stats  队列统计 {pending, processing, done, fai
     "rate_interval": 1.0,
     "inline_set": "dm_e",
     "start_gid": 3000000
+  }
+}
+
+// Request (incremental mixed)
+{
+  "name": "mixed-incremental",
+  "type": "incremental",
+  "category": "Mixed",
+  "config": {
+    "categories": ["Doujinshi", "Manga", "Cosplay"],
+    "scan_window": 10000,
+    "rating_diff_threshold": 0.5
   }
 }
 
@@ -484,8 +497,9 @@ export const getThumbStats = () => fetch(`${BASE}/thumb-queue/stats`).then(r => 
 
 ## 10. 边界与约束
 
-1. **同一 category 可创建多个任务**，但用户需自行避免重复抓取同一范围。Worker 不做互斥检查——这是有意的，给用户最大控制权。
-2. **full 任务完成后** `status = 'completed'`，不自动重启。如需重跑，手动 start 或新建任务。
-3. **incremental 任务**是永续循环，每轮重置进度。`status` 始终为 `running`，除非手动 stop 或异常 error。
-4. **删除任务**是硬删除（`DELETE FROM sync_tasks`）。如需审计日志，未来再加 soft delete。
-5. **thumb_queue** 中 `status = 'done'` 的行可定期清理（如 `DELETE WHERE status = 'done' AND processed_at < NOW() - INTERVAL '7 days'`），但不是 MVP 必须。
+1. **full 任务**按单分类创建；同一分类可创建多个 full 任务（需自行避免重复抓取）。
+2. **incremental 任务全局仅允许一个**（不区分运行状态）。创建第二个 incremental 会返回 `409`。
+3. **full 任务完成后** `status = 'completed'`，不自动重启。如需重跑，手动 start 或新建任务。
+4. **incremental 任务**是永续循环，每轮重置进度。`status` 始终为 `running`，除非手动 stop 或异常 error。
+5. **删除任务**是硬删除（`DELETE FROM sync_tasks`）。如需审计日志，未来再加 soft delete。
+6. **thumb_queue** 中 `status = 'done'` 的行可定期清理（如 `DELETE WHERE status = 'done' AND processed_at < NOW() - INTERVAL '7 days'`），但不是 MVP 必须。

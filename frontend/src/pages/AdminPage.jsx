@@ -29,9 +29,12 @@ const CATEGORY_OPTIONS = [
   'Misc', 'Doujinshi', 'Manga', 'Artist CG', 'Game CG',
   'Image Set', 'Cosplay', 'Asian Porn', 'Non-H', 'Western',
 ];
+const MIXED_CATEGORY = 'Mixed';
+const DEFAULT_INCREMENTAL_CATEGORIES = ['Doujinshi', 'Manga', 'Cosplay'];
 
 const DEFAULT_FULL = { start_gid: '' };
 const DEFAULT_INCREMENTAL = {
+  categories: [...DEFAULT_INCREMENTAL_CATEGORIES],
   scan_window: 10000,
   rating_diff_threshold: 0.5,
 };
@@ -41,13 +44,20 @@ function getDefaultConfig(type) {
 }
 
 function buildPayload(form) {
-  const base = { name: form.name.trim(), type: form.type, category: form.category };
   if (form.type === 'full') {
-    return { ...base, config: { start_gid: form.config.start_gid === '' ? null : Number(form.config.start_gid) } };
+    return {
+      name: form.name.trim(),
+      type: form.type,
+      category: form.category,
+      config: { start_gid: form.config.start_gid === '' ? null : Number(form.config.start_gid) },
+    };
   }
   return {
-    ...base,
+    name: form.name.trim(),
+    type: form.type,
+    category: MIXED_CATEGORY,
     config: {
+      categories: (form.config.categories || []).slice(),
       scan_window: Number(form.config.scan_window),
       rating_diff_threshold: Number(form.config.rating_diff_threshold),
     },
@@ -65,6 +75,13 @@ function getDisplayStatus(task) {
   if (task.status === 'stopped' && task.desired_status === 'running') return 'starting';
   if (task.status === 'running' && task.desired_status === 'stopped') return 'stopping';
   return task.status;
+}
+
+function formatTaskCategory(task) {
+  if (task.type !== 'incremental') return task.category;
+  const categories = Array.isArray(task.config?.categories) ? task.config.categories : [];
+  if (!categories.length) return `${MIXED_CATEGORY}(0)`;
+  return `${MIXED_CATEGORY}(${categories.length}): ${categories.join(', ')}`;
 }
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
@@ -190,20 +207,47 @@ function SelectField({ label, value, onChange, options }) {
 
 // ─── Create Task Modal ────────────────────────────────────────────────────────
 
-function CreateTaskModal({ open, onClose, onCreated }) {
+function CreateTaskModal({ open, onClose, onCreated, tasks }) {
   const [busy, setBusy] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [form, setForm] = useState({
     name: '', type: 'full', category: 'Cosplay', config: getDefaultConfig('full'),
   });
+  const hasIncrementalTask = (tasks || []).some((task) => task.type === 'incremental');
 
   const handleTypeChange = (nextType) => {
-    setForm((prev) => ({ ...prev, type: nextType, config: getDefaultConfig(nextType) }));
+    setForm((prev) => ({
+      ...prev,
+      type: nextType,
+      category: nextType === 'full'
+        ? (CATEGORY_OPTIONS.includes(prev.category) ? prev.category : 'Cosplay')
+        : MIXED_CATEGORY,
+      config: getDefaultConfig(nextType),
+    }));
+  };
+
+  const toggleIncrementalCategory = (category) => {
+    setForm((prev) => {
+      const current = Array.isArray(prev.config.categories) ? prev.config.categories : [];
+      const exists = current.includes(category);
+      const nextCategories = exists
+        ? current.filter((c) => c !== category)
+        : [...current, category];
+      return { ...prev, config: { ...prev.config, categories: nextCategories } };
+    });
   };
 
   const handleSubmit = async () => {
     setErrorMsg('');
     if (!form.name.trim()) { setErrorMsg('名称不能为空'); return; }
+    if (form.type === 'incremental' && hasIncrementalTask) {
+      setErrorMsg('仅允许创建一个 incremental 任务');
+      return;
+    }
+    if (form.type === 'incremental' && (!Array.isArray(form.config.categories) || form.config.categories.length === 0)) {
+      setErrorMsg('incremental 至少选择一个分类');
+      return;
+    }
     setBusy(true);
     try {
       await createTask(buildPayload(form));
@@ -251,12 +295,35 @@ function CreateTaskModal({ open, onClose, onCreated }) {
             onChange={(e) => handleTypeChange(e.target.value)}
             options={[{ label: 'Full Scan', value: 'full' }, { label: 'Incremental', value: 'incremental' }]}
           />
-          <SelectField
-            label="分类 (Category)"
-            value={form.category}
-            onChange={(e) => setForm((p) => ({ ...p, category: e.target.value }))}
-            options={CATEGORY_OPTIONS}
-          />
+          {form.type === 'full' ? (
+            <SelectField
+              label="分类 (Category)"
+              value={form.category}
+              onChange={(e) => setForm((p) => ({ ...p, category: e.target.value }))}
+              options={CATEGORY_OPTIONS}
+            />
+          ) : (
+            <div>
+              <label className="block text-xs font-medium text-gray-400 mb-1.5">分类 (categories)</label>
+              <div className="rounded-lg border border-white/10 bg-white/5 p-2.5 space-y-1.5 max-h-44 overflow-y-auto">
+                {CATEGORY_OPTIONS.map((category) => {
+                  const checked = (form.config.categories || []).includes(category);
+                  return (
+                    <label key={category} className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleIncrementalCategory(category)}
+                        className="rounded border-white/20 bg-white/10 text-blue-500 focus:ring-blue-500/40"
+                      />
+                      <span>{category}</span>
+                    </label>
+                  );
+                })}
+              </div>
+              <p className="mt-1.5 text-xs text-gray-500">Incremental 使用 Mixed 模式，按上传活跃度抓取。</p>
+            </div>
+          )}
 
           {/* Config fields */}
           <div className="rounded-xl border border-white/10 bg-white/3 p-4 space-y-3">
@@ -287,6 +354,11 @@ function CreateTaskModal({ open, onClose, onCreated }) {
               </>
             )}
           </div>
+          {form.type === 'incremental' && hasIncrementalTask && (
+            <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 px-3 py-2 text-sm text-amber-300">
+              已存在 incremental 任务。系统仅允许一个 incremental 任务。
+            </div>
+          )}
 
           {errorMsg && (
             <div className="rounded-lg bg-rose-500/10 border border-rose-500/30 px-3 py-2 text-sm text-rose-400">
@@ -305,7 +377,7 @@ function CreateTaskModal({ open, onClose, onCreated }) {
           </button>
           <button
             onClick={handleSubmit}
-            disabled={busy}
+            disabled={busy || (form.type === 'incremental' && hasIncrementalTask)}
             className="px-4 py-2 text-sm rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium transition-all disabled:opacity-50 flex items-center gap-2"
           >
             {busy && <Loader2 size={14} className="animate-spin" />}
@@ -601,7 +673,7 @@ export default function AdminPage() {
                           {task.type}
                         </span>
                       </td>
-                      <td className="px-4 py-3.5 text-gray-300">{task.category}</td>
+                      <td className="px-4 py-3.5 text-gray-300">{formatTaskCategory(task)}</td>
                       <td className="px-4 py-3.5">
                         <StatusBadge status={displayStatus} />
                       </td>
@@ -660,6 +732,7 @@ export default function AdminPage() {
         open={openCreate}
         onClose={() => setOpenCreate(false)}
         onCreated={refresh}
+        tasks={tasks}
       />
 
       {/* Delete Confirm Modal */}

@@ -29,6 +29,7 @@ _CATEGORY_BITS = {
     "Western": 512,
 }
 VALID_CATEGORIES = set(_CATEGORY_BITS.keys())
+MIXED_CATEGORY = "Mixed"
 
 SCHEDULER_POLL_INTERVAL = 3
 THUMB_IDLE_SLEEP = 5
@@ -105,6 +106,7 @@ DEFAULT_FULL_CONFIG = {
 
 DEFAULT_INCREMENTAL_CONFIG = {
     "inline_set": "dm_e",
+    "categories": ["Doujinshi", "Manga", "Cosplay"],
     "scan_window": 10000,
     "rating_diff_threshold": 0.5,
 }
@@ -136,13 +138,30 @@ def normalize_full_config(raw: dict | None) -> dict:
 
 
 def normalize_incremental_config(raw: dict | None) -> dict:
+    cfg_raw = dict(raw or {})
+    categories = cfg_raw.get("categories")
+    if not isinstance(categories, list) or not categories:
+        raise ValueError("incremental config.categories must be a non-empty list")
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in categories:
+        if not isinstance(item, str):
+            raise ValueError("incremental config.categories must be a list of strings")
+        value = item.strip()
+        if value not in VALID_CATEGORIES:
+            raise ValueError(f"invalid category '{value}' in incremental config.categories")
+        if value not in seen:
+            seen.add(value)
+            normalized.append(value)
+
     cfg = dict(DEFAULT_INCREMENTAL_CONFIG)
-    cfg.update({k: v for k, v in (raw or {}).items() if k != "inline_set"})
     cfg["inline_set"] = "dm_e"  # 始终写死
-    cfg.pop("detail_quota", None)  # 已废弃，清理残留
-    cfg.pop("gid_window", None)  # 已重命名为 scan_window
-    cfg["scan_window"] = int(cfg.get("scan_window") or 10000)
-    cfg["rating_diff_threshold"] = float(cfg.get("rating_diff_threshold") or 0.5)
+    cfg["categories"] = normalized
+    cfg["scan_window"] = int(cfg_raw.get("scan_window") or DEFAULT_INCREMENTAL_CONFIG["scan_window"])
+    cfg["rating_diff_threshold"] = float(
+        cfg_raw.get("rating_diff_threshold") or DEFAULT_INCREMENTAL_CONFIG["rating_diff_threshold"]
+    )
     return cfg
 
 
@@ -226,12 +245,17 @@ async def validate_access(client: AsyncSession) -> bool:
 
 async def fetch_list_page(
     client: AsyncSession,
-    category: str,
+    categories: list[str],
     inline_set: str,
     next_gid: int | None = None,
     task_name: str | None = None,
+    category_label: str | None = None,
 ):
-    fcats = _ALL_CATS - _CATEGORY_BITS[category]
+    include_mask = 0
+    for category in categories:
+        include_mask |= _CATEGORY_BITS[category]
+    fcats = _ALL_CATS - include_mask
+    label = category_label or ",".join(categories)
     url = f"{config.EX_BASE_URL}/?f_cats={fcats}&inline_set={inline_set}"
     if next_gid is not None:
         url += f"&next={next_gid}"
@@ -242,7 +266,7 @@ async def fetch_list_page(
         logger.info(f"[LIST ] {_tid}GET {url}")
         resp = await client.get(url, timeout=30)
         if resp.status_code != 200:
-            logger.warning(f"[LIST ] {_tid}{category:<10} HTTP {resp.status_code}")
+            logger.warning(f"[LIST ] {_tid}{label:<10} HTTP {resp.status_code}")
             return None
 
         if "panda.png" in resp.text or "Sad Panda" in resp.text:
@@ -261,7 +285,7 @@ async def fetch_list_page(
         items, next_gid, total_count = parse_gallery_list(resp.text)
         return items, next_gid, total_count
     except Exception as e:
-        logger.error(f"[LIST ] {_tid}{category:<10} fetch error: {e}")
+        logger.error(f"[LIST ] {_tid}{label:<10} fetch error: {e}")
         return None
 
 
@@ -402,7 +426,14 @@ async def run_full_once(client: AsyncSession, task_id: int, runtime: dict) -> bo
     next_gid = state.get("next_gid")
 
     logger.info(f"[FULL ] [{_name}] category={category} fetching next_gid={next_gid}")
-    result = await fetch_list_page(client, category, cfg["inline_set"], next_gid, task_name=runtime["name"])
+    result = await fetch_list_page(
+        client,
+        [category],
+        cfg["inline_set"],
+        next_gid,
+        task_name=runtime["name"],
+        category_label=category,
+    )
 
     if result is None:
         logger.warning(f"[FULL ] [{_name}] fetch_list_page failed, will retry next loop")
@@ -516,7 +547,8 @@ async def run_incremental_once(client: AsyncSession, task_id: int, runtime: dict
     cycle_cfg = normalize_incremental_config(runtime.get("config"))
     state = normalize_incremental_state(runtime.get("state"))
     _name = runtime["name"]
-    category = runtime["category"]
+    task_category = runtime["category"]
+    categories = cycle_cfg["categories"]
 
     cursor = state.get("next_gid")
     round_num = int(state.get("round") or 0)
@@ -548,9 +580,17 @@ async def run_incremental_once(client: AsyncSession, task_id: int, runtime: dict
 
         page_cfg = normalize_incremental_config(runtime_now.get("config"))
         inline_set = page_cfg["inline_set"]
+        categories = page_cfg["categories"]
         rating_threshold = page_cfg["rating_diff_threshold"]
 
-        result = await fetch_list_page(client, category, inline_set, cursor, task_name=runtime["name"])
+        result = await fetch_list_page(
+            client,
+            categories,
+            inline_set,
+            cursor,
+            task_name=runtime["name"],
+            category_label=f"{task_category}({len(categories)})",
+        )
 
         if result is None:
             logger.warning(f"[INCR ] [{_name}] fetch_list_page failed, cursor={cursor}")
@@ -570,7 +610,8 @@ async def run_incremental_once(client: AsyncSession, task_id: int, runtime: dict
         if latest_gid is None:
             latest_gid = max(item.gid for item in items)
             logger.info(
-                f"[INCR ] [{_name}] cycle start category={category}"
+                f"[INCR ] [{_name}] cycle start category={task_category}"
+                f" categories={categories}"
                 f" latest={latest_gid} scan_window={scan_window}"
             )
 
@@ -700,14 +741,30 @@ async def run_task(client: AsyncSession, task_id: int):
                 logger.info(f"[TASK ] [{_name}] stop requested")
                 return
 
-            # 校验 category 合法性
-            category = runtime.get("category", "")
-            if category not in VALID_CATEGORIES:
-                msg = f"category '{category}' is not a valid ExHentai category. Valid: {sorted(VALID_CATEGORIES)}"
-                logger.error(f"[TASK ] [{_name}] {msg}")
-                db.update_task_runtime(task_id, status="error", error_message=msg, touch_run_time=True)
-                db.set_task_desired_status(task_id, "stopped")
-                return
+            if runtime["type"] == "full":
+                category = runtime.get("category", "")
+                if category not in VALID_CATEGORIES:
+                    msg = f"category '{category}' is not a valid ExHentai category. Valid: {sorted(VALID_CATEGORIES)}"
+                    logger.error(f"[TASK ] [{_name}] {msg}")
+                    db.update_task_runtime(task_id, status="error", error_message=msg, touch_run_time=True)
+                    db.set_task_desired_status(task_id, "stopped")
+                    return
+            else:
+                category = runtime.get("category", "")
+                if category != MIXED_CATEGORY:
+                    msg = f"incremental task category must be '{MIXED_CATEGORY}', got '{category}'"
+                    logger.error(f"[TASK ] [{_name}] {msg}")
+                    db.update_task_runtime(task_id, status="error", error_message=msg, touch_run_time=True)
+                    db.set_task_desired_status(task_id, "stopped")
+                    return
+                try:
+                    normalize_incremental_config(runtime.get("config"))
+                except Exception as e:
+                    msg = f"invalid incremental config: {e}"
+                    logger.error(f"[TASK ] [{_name}] {msg}")
+                    db.update_task_runtime(task_id, status="error", error_message=msg, touch_run_time=True)
+                    db.set_task_desired_status(task_id, "stopped")
+                    return
 
             db.update_task_runtime(task_id, status="running", error_message="", touch_run_time=True)
 

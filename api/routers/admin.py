@@ -5,10 +5,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from db import get_db
 from models import (
+    MIXED_CATEGORY,
     SyncTask,
     SyncTaskCreate,
     SyncTaskUpdate,
     ThumbQueueStats,
+    VALID_CATEGORIES,
 )
 
 router = APIRouter(prefix="/v1/admin", tags=["admin"])
@@ -20,6 +22,7 @@ DEFAULT_FULL_CONFIG = {
 
 DEFAULT_INCREMENTAL_CONFIG = {
     "inline_set": "dm_e",
+    "categories": ["Doujinshi", "Manga", "Cosplay"],
     "scan_window": 10000,
     "rating_diff_threshold": 0.5,
 }
@@ -43,9 +46,45 @@ def _init_state(task_type: str, cfg: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _normalize_config(task_type: str, config: Dict[str, Any]) -> Dict[str, Any]:
-    base = DEFAULT_FULL_CONFIG if task_type == "full" else DEFAULT_INCREMENTAL_CONFIG
-    merged = dict(base)
-    merged.update({k: v for k, v in (config or {}).items() if k != "inline_set"})
+    raw = dict(config or {})
+    if task_type == "full":
+        merged = dict(DEFAULT_FULL_CONFIG)
+        merged["start_gid"] = raw.get("start_gid")
+        merged["inline_set"] = "dm_e"  # 始终写死，不允许覆盖
+        return merged
+
+    # incremental: strict schema, no legacy keys compatibility.
+    cats = raw.get("categories")
+    if not isinstance(cats, list) or not cats:
+        raise HTTPException(status_code=422, detail="incremental config.categories must be a non-empty list")
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in cats:
+        if not isinstance(item, str):
+            raise HTTPException(status_code=422, detail="incremental config.categories must be a list of strings")
+        value = item.strip()
+        if value not in VALID_CATEGORIES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"invalid category '{value}' in config.categories",
+            )
+        if value not in seen:
+            seen.add(value)
+            normalized.append(value)
+
+    merged = dict(DEFAULT_INCREMENTAL_CONFIG)
+    merged["categories"] = normalized
+    try:
+        merged["scan_window"] = int(raw.get("scan_window") or DEFAULT_INCREMENTAL_CONFIG["scan_window"])
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="incremental config.scan_window must be an integer") from exc
+    try:
+        merged["rating_diff_threshold"] = float(
+            raw.get("rating_diff_threshold") or DEFAULT_INCREMENTAL_CONFIG["rating_diff_threshold"]
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="incremental config.rating_diff_threshold must be a number") from exc
     merged["inline_set"] = "dm_e"  # 始终写死，不允许覆盖
     return merged
 
@@ -73,6 +112,17 @@ def _is_transitioning(task: SyncTask) -> bool:
 
 @router.post("/tasks", response_model=SyncTask, status_code=status.HTTP_201_CREATED)
 def create_task(payload: SyncTaskCreate, db=Depends(get_db)):
+    if payload.type == "incremental":
+        if payload.category != MIXED_CATEGORY:
+            raise HTTPException(status_code=422, detail=f"incremental category must be '{MIXED_CATEGORY}'")
+        db.execute("SELECT id, name FROM sync_tasks WHERE type = 'incremental' LIMIT 1")
+        existing = db.fetchone()
+        if existing:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Only one incremental task is allowed (existing id={existing[0]} name={existing[1]})",
+            )
+
     cfg = _normalize_config(payload.type, payload.config)
     state = _init_state(payload.type, cfg)
 
