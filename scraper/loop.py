@@ -99,14 +99,13 @@ _rate_limiter: GlobalRateLimiter | None = None
 _thumb_rate_limiter: GlobalRateLimiter | None = None
 
 DEFAULT_FULL_CONFIG = {
-    "inline_set": "dm_l",
+    "inline_set": "dm_e",
     "start_gid": None,
 }
 
 DEFAULT_INCREMENTAL_CONFIG = {
-    "inline_set": "dm_l",
-    "detail_quota": 25,
-    "gid_window": 10000,
+    "inline_set": "dm_e",
+    "scan_window": 10000,
     "rating_diff_threshold": 0.5,
 }
 
@@ -124,14 +123,14 @@ def init_state(task_type: str, task_config: dict) -> dict:
         "next_gid": None,
         "round": 0,
         "latest_gid": None,
-        "cutoff_gid": None,
+        "scanned_count": 0,
     }
 
 
 def normalize_full_config(raw: dict | None) -> dict:
     cfg = dict(DEFAULT_FULL_CONFIG)
     cfg.update({k: v for k, v in (raw or {}).items() if k != "inline_set"})
-    cfg["inline_set"] = "dm_l"  # 始终写死
+    cfg["inline_set"] = "dm_e"  # 始终写死
     cfg["start_gid"] = cfg.get("start_gid")
     return cfg
 
@@ -139,9 +138,10 @@ def normalize_full_config(raw: dict | None) -> dict:
 def normalize_incremental_config(raw: dict | None) -> dict:
     cfg = dict(DEFAULT_INCREMENTAL_CONFIG)
     cfg.update({k: v for k, v in (raw or {}).items() if k != "inline_set"})
-    cfg["inline_set"] = "dm_l"  # 始终写死
-    cfg["detail_quota"] = int(cfg.get("detail_quota") or 25)
-    cfg["gid_window"] = int(cfg.get("gid_window") or 10000)
+    cfg["inline_set"] = "dm_e"  # 始终写死
+    cfg.pop("detail_quota", None)  # 已废弃，清理残留
+    cfg.pop("gid_window", None)  # 已重命名为 scan_window
+    cfg["scan_window"] = int(cfg.get("scan_window") or 10000)
     cfg["rating_diff_threshold"] = float(cfg.get("rating_diff_threshold") or 0.5)
     return cfg
 
@@ -175,14 +175,10 @@ def calc_full_progress(
     return clamp_progress(db_count / total_count * 100)
 
 
-def calc_incremental_progress(latest_gid: int | None, cutoff_gid: int | None, cursor_gid: int | None) -> float:
-    if latest_gid is None or cutoff_gid is None or cursor_gid is None:
-        return 0.0
-    total = latest_gid - cutoff_gid
-    if total <= 0:
+def calc_incremental_progress(scanned_count: int, scan_window: int) -> float:
+    if scan_window <= 0:
         return 100.0
-    pct = ((latest_gid - cursor_gid) / total) * 100
-    return clamp_progress(pct)
+    return clamp_progress(scanned_count / scan_window * 100)
 
 
 async def validate_access(client: AsyncSession) -> bool:
@@ -233,26 +229,28 @@ async def fetch_list_page(
     category: str,
     inline_set: str,
     next_gid: int | None = None,
+    task_name: str | None = None,
 ):
     fcats = _ALL_CATS - _CATEGORY_BITS[category]
     url = f"{config.EX_BASE_URL}/?f_cats={fcats}&inline_set={inline_set}"
     if next_gid is not None:
         url += f"&next={next_gid}"
+    _tid = f"name={task_name} " if task_name is not None else ""
 
     try:
         await _rate_limiter.acquire()
-        logger.info(f"[LIST ] GET {url}")
+        logger.info(f"[LIST ] {_tid}GET {url}")
         resp = await client.get(url, timeout=30)
         if resp.status_code != 200:
-            logger.warning(f"[LIST ] {category:<10} HTTP {resp.status_code}")
+            logger.warning(f"[LIST ] {_tid}{category:<10} HTTP {resp.status_code}")
             return None
 
         if "panda.png" in resp.text or "Sad Panda" in resp.text:
-            logger.error("Sad Panda detected while fetching list page.")
+            logger.error(f"[LIST ] {_tid}Sad Panda detected while fetching list page.")
             return None
 
         if "This page requires you to log on" in resp.text:
-            logger.error("Login required while fetching list page.")
+            logger.error(f"[LIST ] {_tid}Login required while fetching list page.")
             return None
 
         if "temporarily banned" in resp.text or "IP address has been" in resp.text:
@@ -263,18 +261,19 @@ async def fetch_list_page(
         items, next_gid, total_count = parse_gallery_list(resp.text)
         return items, next_gid, total_count
     except Exception as e:
-        logger.error(f"[LIST ] {category:<10} fetch error: {e}")
+        logger.error(f"[LIST ] {_tid}{category:<10} fetch error: {e}")
         return None
 
 
-async def fetch_detail(client: AsyncSession, gid: int, token: str):
+async def fetch_detail(client: AsyncSession, gid: int, token: str, task_name: str | None = None):
     url = f"{config.EX_BASE_URL}/g/{gid}/{token}/"
+    _tid = f"[{task_name}] " if task_name is not None else ""
     try:
         await _rate_limiter.acquire()
-        logger.info(f"[DETAIL] GET {url}")
+        logger.info(f"[DETAIL] {_tid}GET {url}")
         resp = await client.get(url, timeout=30)
         if resp.status_code != 200:
-            logger.warning(f"[DETAIL] gid={gid} HTTP {resp.status_code}")
+            logger.warning(f"[DETAIL] {_tid}gid={gid} HTTP {resp.status_code}")
             return None
         if "temporarily banned" in resp.text or "IP address has been" in resp.text:
             ban_secs = _parse_ban_seconds(resp.text)
@@ -282,7 +281,7 @@ async def fetch_detail(client: AsyncSession, gid: int, token: str):
             return "BANNED"
         return parse_detail(resp.text)
     except Exception as e:
-        logger.error(f"[DETAIL] gid={gid} fetch error: {e}")
+        logger.error(f"[DETAIL] {_tid}gid={gid} fetch error: {e}")
         return None
 
 
@@ -297,18 +296,21 @@ def get_gallery_meta(gid: int):
         return {
             "fav_count": int(fav_count or 0),
             "rating": float(rating) if rating is not None else None,
-            "tag_count": count_detail_tags(tags),
+            "detail_tags": flatten_detail_tags(tags),
         }
 
 
-def count_detail_tags(tags_obj) -> int:
+def flatten_detail_tags(tags_obj) -> set[str]:
     if not isinstance(tags_obj, dict):
-        return 0
-    total = 0
+        return set()
+    out: set[str] = set()
     for values in tags_obj.values():
         if isinstance(values, (list, tuple)):
-            total += len(values)
-    return total
+            for value in values:
+                text = " ".join(str(value or "").split()).lower()
+                if text:
+                    out.add(text)
+    return out
 
 
 def bucket_rating(value: float | None) -> float | None:
@@ -324,18 +326,47 @@ def should_refresh_from_list(
 ) -> tuple[bool, list[str]]:
     reasons: list[str] = []
 
-    if item.visible_tag_count != existing["tag_count"]:
-        reasons.append(f"tags:{existing['tag_count']}->{item.visible_tag_count}")
+    detail_tags: set[str] = existing["detail_tags"]
+    list_tags = {tag for tag in item.visible_tags if tag}
+    missing_tags = sorted(list_tags - detail_tags)
+    tag_ok = not missing_tags
+    if missing_tags:
+        reasons.append(f"tags_missing:{len(missing_tags)}")
 
     detail_bucket = bucket_rating(existing["rating"])
     list_bucket = bucket_rating(item.rating_est)
 
+    rating_eq = True
     if detail_bucket is None and list_bucket is not None:
         reasons.append(f"rating:none->{list_bucket:.1f}")
+        rating_eq = False
     elif detail_bucket is not None and list_bucket is not None:
         diff = abs(detail_bucket - list_bucket)
         if diff >= threshold:
             reasons.append(f"rating:{detail_bucket:.1f}->{list_bucket:.1f}")
+            rating_eq = False
+
+    decision = "refresh" if reasons else "skip"
+    if detail_bucket is None and list_bucket is None:
+        rating_part = "rating=None==None"
+    elif detail_bucket is None:
+        rating_part = f"rating=None!={list_bucket:.1f}"
+    elif list_bucket is None:
+        rating_part = f"rating={detail_bucket:.1f}!=None"
+    elif rating_eq:
+        rating_part = f"rating={detail_bucket:.1f}=={list_bucket:.1f}"
+    else:
+        rating_part = f"rating={detail_bucket:.1f}!={list_bucket:.1f}"
+    if tag_ok:
+        tag_part = f"tag=subset({len(list_tags)}/{len(list_tags)})"
+    else:
+        tag_part = f"tag=subset({len(list_tags) - len(missing_tags)}/{len(list_tags)})"
+    if missing_tags:
+        preview = ",".join(missing_tags[:3])
+        if len(missing_tags) > 3:
+            preview += ",..."
+        tag_part += f" missing=[{preview}]"
+    logger.info(f"[INCR ] gid={item.gid} {tag_part} {rating_part} → {decision}")
 
     return bool(reasons), reasons
 
@@ -362,6 +393,7 @@ def build_upsert_row(gid: int, token: str, detail: dict):
 async def run_full_once(client: AsyncSession, task_id: int, runtime: dict) -> bool:
     cfg = normalize_full_config(runtime.get("config"))
     state = normalize_full_state(runtime.get("state"), cfg)
+    _name = runtime["name"]
 
     if state.get("done") and runtime.get("status") == "completed":
         state = init_state("full", cfg)
@@ -369,11 +401,11 @@ async def run_full_once(client: AsyncSession, task_id: int, runtime: dict) -> bo
     category = runtime["category"]
     next_gid = state.get("next_gid")
 
-    logger.info(f"[FULL ] id={task_id} category={category} fetching next_gid={next_gid}")
-    result = await fetch_list_page(client, category, cfg["inline_set"], next_gid)
+    logger.info(f"[FULL ] [{_name}] category={category} fetching next_gid={next_gid}")
+    result = await fetch_list_page(client, category, cfg["inline_set"], next_gid, task_name=runtime["name"])
 
     if result is None:
-        logger.warning(f"[FULL ] id={task_id} fetch_list_page failed, will retry next loop")
+        logger.warning(f"[FULL ] [{_name}] fetch_list_page failed, will retry next loop")
         db.update_task_runtime(
             task_id,
             state=state,
@@ -386,7 +418,7 @@ async def run_full_once(client: AsyncSession, task_id: int, runtime: dict) -> bo
 
     if result == "BANNED":
         ban_msg = "IP temporarily banned by ExHentai, will retry when ban expires"
-        logger.warning(f"[FULL ] id={task_id} {ban_msg}")
+        logger.warning(f"[FULL ] [{_name}] {ban_msg}")
         db.update_task_runtime(
             task_id,
             state=state,
@@ -407,16 +439,16 @@ async def run_full_once(client: AsyncSession, task_id: int, runtime: dict) -> bo
         state["total_count"] = max(total_count, state.get("total_count") or 0) or total_count
 
     logger.info(
-        f"[FULL ] id={task_id} category={category} page_items={len(items)}"
+        f"[FULL ] [{_name}] category={category} page_items={len(items)}"
         f" next_gid={next_cursor} total_count={state.get('total_count')}"
     )
 
     rows_to_upsert = []
     for item in items:
-        detail = await fetch_detail(client, item.gid, item.token)
+        detail = await fetch_detail(client, item.gid, item.token, task_name=runtime["name"])
         if detail == "BANNED":
             ban_msg = "IP temporarily banned by ExHentai, will retry when ban expires"
-            logger.warning(f"[FULL ] id={task_id} gid={item.gid} {ban_msg}")
+            logger.warning(f"[FULL ] [{_name}] gid={item.gid} {ban_msg}")
             db.update_task_runtime(
                 task_id,
                 state=state,
@@ -429,7 +461,7 @@ async def run_full_once(client: AsyncSession, task_id: int, runtime: dict) -> bo
         if detail:
             rows_to_upsert.append(build_upsert_row(item.gid, item.token, detail))
         else:
-            logger.warning(f"[FULL ] id={task_id} gid={item.gid} detail fetch failed, skipping")
+            logger.warning(f"[FULL ] [{_name}] gid={item.gid} detail fetch failed, skipping")
 
     if rows_to_upsert:
         db.upsert_galleries_bulk(rows_to_upsert)
@@ -452,7 +484,7 @@ async def run_full_once(client: AsyncSession, task_id: int, runtime: dict) -> bo
             touch_run_time=True,
         )
         db.set_task_desired_status(task_id, "stopped")
-        logger.info(f"[FULL ] id={task_id} completed round={round_num + 1}")
+        logger.info(f"[FULL ] [{_name}] completed round={round_num + 1}")
         return True
 
     state["next_gid"] = next_cursor
@@ -465,7 +497,7 @@ async def run_full_once(client: AsyncSession, task_id: int, runtime: dict) -> bo
         done=False,
     )
     logger.info(
-        f"[FULL ] id={task_id} upserted={len(rows_to_upsert)}"
+        f"[FULL ] [{_name}] upserted={len(rows_to_upsert)}"
         f" db_count={db_count} progress={progress_pct:.2f}%"
     )
 
@@ -483,33 +515,28 @@ async def run_full_once(client: AsyncSession, task_id: int, runtime: dict) -> bo
 async def run_incremental_once(client: AsyncSession, task_id: int, runtime: dict) -> bool:
     cycle_cfg = normalize_incremental_config(runtime.get("config"))
     state = normalize_incremental_state(runtime.get("state"))
+    _name = runtime["name"]
     category = runtime["category"]
 
     cursor = state.get("next_gid")
     round_num = int(state.get("round") or 0)
     latest_gid = state.get("latest_gid")
-    cutoff_gid = state.get("cutoff_gid")
+    scanned_count = int(state.get("scanned_count") or 0)
 
-    if cursor is not None and (latest_gid is None or cutoff_gid is None):
-        cursor = None
-        latest_gid = None
-        cutoff_gid = None
-
-    quota = cycle_cfg["detail_quota"]
-    cycle_gid_window = cycle_cfg["gid_window"]
+    scan_window = cycle_cfg["scan_window"]
     rating_threshold = cycle_cfg["rating_diff_threshold"]
 
-    exit_reason = "QUOTA"
+    exit_reason = None
     progress_pct = float(runtime.get("progress_pct") or 0.0)
 
-    while quota > 0:
+    while True:
         runtime_now = db.get_task_runtime(task_id)
         if not runtime_now:
             return True
         if runtime_now["desired_status"] != "running":
             state["next_gid"] = cursor
             state["latest_gid"] = latest_gid
-            state["cutoff_gid"] = cutoff_gid
+            state["scanned_count"] = scanned_count
             db.update_task_runtime(
                 task_id,
                 state=state,
@@ -523,15 +550,15 @@ async def run_incremental_once(client: AsyncSession, task_id: int, runtime: dict
         inline_set = page_cfg["inline_set"]
         rating_threshold = page_cfg["rating_diff_threshold"]
 
-        result = await fetch_list_page(client, category, inline_set, cursor)
+        result = await fetch_list_page(client, category, inline_set, cursor, task_name=runtime["name"])
 
         if result is None:
-            logger.warning(f"[INCR ] id={task_id} fetch_list_page failed, cursor={cursor}")
+            logger.warning(f"[INCR ] [{_name}] fetch_list_page failed, cursor={cursor}")
             exit_reason = "ERROR"
             break
 
         if result == "BANNED":
-            logger.warning(f"[INCR ] id={task_id} IP banned, cursor={cursor}")
+            logger.warning(f"[INCR ] [{_name}] IP banned, cursor={cursor}")
             exit_reason = "BANNED"
             break
 
@@ -542,73 +569,93 @@ async def run_incremental_once(client: AsyncSession, task_id: int, runtime: dict
 
         if latest_gid is None:
             latest_gid = max(item.gid for item in items)
-            cutoff_gid = max(0, latest_gid - cycle_gid_window)
             logger.info(
-                f"[INCR ] id={task_id} cycle start category={category}"
-                f" latest={latest_gid} cutoff={cutoff_gid}"
+                f"[INCR ] [{_name}] cycle start category={category}"
+                f" latest={latest_gid} scan_window={scan_window}"
             )
 
         logger.debug(
-            f"[INCR ] id={task_id} page cursor={cursor} items={len(items)} quota_left={quota}"
+            f"[INCR ] [{_name}] page cursor={cursor} items={len(items)}"
         )
 
         rows_to_upsert = []
+        n_new = n_skip = n_refresh = 0
         for item in items:
-            if quota <= 0:
-                break
-
             existing = get_gallery_meta(item.gid)
             if existing is None:
-                detail = await fetch_detail(client, item.gid, item.token)
-                quota -= 1
+                n_new += 1
+                detail = await fetch_detail(client, item.gid, item.token, task_name=runtime["name"])
                 if detail == "BANNED":
-                    logger.warning(f"[INCR ] id={task_id} gid={item.gid} IP banned")
+                    logger.warning(f"[INCR ] [{_name}] gid={item.gid} IP banned (new)")
                     exit_reason = "BANNED"
-                    quota = 0
                     break
                 if detail:
                     rows_to_upsert.append(build_upsert_row(item.gid, item.token, detail))
                 continue
 
-            should_fetch, _ = should_refresh_from_list(existing, item, rating_threshold)
+            should_fetch, reasons = should_refresh_from_list(existing, item, rating_threshold)
             if not should_fetch:
+                n_skip += 1
                 continue
 
-            detail = await fetch_detail(client, item.gid, item.token)
-            quota -= 1
+            n_refresh += 1
+            detail = await fetch_detail(client, item.gid, item.token, task_name=runtime["name"])
             if detail == "BANNED":
-                logger.warning(f"[INCR ] id={task_id} gid={item.gid} IP banned")
+                logger.warning(f"[INCR ] [{_name}] gid={item.gid} IP banned (refresh)")
                 exit_reason = "BANNED"
-                quota = 0
                 break
             if detail:
                 rows_to_upsert.append(build_upsert_row(item.gid, item.token, detail))
 
+        # 所有 items 计入已扫描（含 skip/new/refresh）
+        scanned_count += len(items)
+
+        logger.info(
+            f"[INCR ] [{_name}] page_items={len(items)}"
+            f" new={n_new} skip={n_skip} refresh={n_refresh}"
+        )
+
         if rows_to_upsert:
             db.upsert_galleries_bulk(rows_to_upsert)
 
+        if exit_reason == "BANNED":
+            break
+
         cursor = next_cursor
-        progress_pct = calc_incremental_progress(latest_gid, cutoff_gid, cursor)
+        progress_pct = calc_incremental_progress(scanned_count, scan_window)
         logger.info(
-            f"[INCR ] id={task_id} upserted={len(rows_to_upsert)}"
-            f" quota_left={quota} progress={progress_pct:.1f}%"
+            f"[INCR ] [{_name}] upserted={len(rows_to_upsert)}"
+            f" scanned={scanned_count}/{scan_window} progress={progress_pct:.1f}%"
         )
 
         if cursor is None:
             exit_reason = "END"
             break
-        if cutoff_gid is not None and cursor <= cutoff_gid:
-            exit_reason = "CUTOFF"
+        if scanned_count >= scan_window:
+            exit_reason = "WINDOW"
             break
 
-    logger.info(f"[INCR ] id={task_id} exit_reason={exit_reason} round={round_num}")
+        # ---- 逐页持久化中间状态，使前端可实时观察进度 ----
+        state["next_gid"] = cursor
+        state["latest_gid"] = latest_gid
+        state["scanned_count"] = scanned_count
+        db.update_task_runtime(
+            task_id,
+            state=state,
+            progress_pct=progress_pct,
+            status="running",
+            error_message="",
+            touch_run_time=True,
+        )
 
-    if exit_reason in ("END", "CUTOFF"):
+    logger.info(f"[INCR ] [{_name}] exit_reason={exit_reason} round={round_num}")
+
+    if exit_reason in ("END", "WINDOW"):
         new_state = {
             "next_gid": None,
             "round": round_num + 1,
             "latest_gid": None,
-            "cutoff_gid": None,
+            "scanned_count": 0,
         }
         db.update_task_runtime(
             task_id,
@@ -623,7 +670,7 @@ async def run_incremental_once(client: AsyncSession, task_id: int, runtime: dict
     state["next_gid"] = cursor
     state["round"] = round_num
     state["latest_gid"] = latest_gid
-    state["cutoff_gid"] = cutoff_gid
+    state["scanned_count"] = scanned_count
     ban_msg = "IP temporarily banned by ExHentai, will retry when ban expires"
     db.update_task_runtime(
         task_id,
@@ -645,18 +692,19 @@ async def run_task(client: AsyncSession, task_id: int):
             if not runtime:
                 logger.info(f"[TASK ] id={task_id} deleted")
                 return
+            _name = runtime["name"]
 
             if runtime["desired_status"] != "running":
                 if runtime["status"] not in ("completed", "error"):
                     db.update_task_runtime(task_id, status="stopped", touch_run_time=True)
-                logger.info(f"[TASK ] id={task_id} stop requested")
+                logger.info(f"[TASK ] [{_name}] stop requested")
                 return
 
             # 校验 category 合法性
             category = runtime.get("category", "")
             if category not in VALID_CATEGORIES:
                 msg = f"category '{category}' is not a valid ExHentai category. Valid: {sorted(VALID_CATEGORIES)}"
-                logger.error(f"[TASK ] id={task_id} {msg}")
+                logger.error(f"[TASK ] [{_name}] {msg}")
                 db.update_task_runtime(task_id, status="error", error_message=msg, touch_run_time=True)
                 db.set_task_desired_status(task_id, "stopped")
                 return

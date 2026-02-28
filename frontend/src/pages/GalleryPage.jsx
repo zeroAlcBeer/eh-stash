@@ -1,9 +1,10 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { LayoutGrid, LayoutList, ChevronFirst, ChevronLast, ChevronLeft, ChevronRight, Loader2, AlertCircle, Heart, Star, MessageCircle, Calendar, ChevronDown } from 'lucide-react';
+import { LayoutGrid, LayoutList, ChevronFirst, ChevronLast, ChevronLeft, ChevronRight, Loader2, AlertCircle, Heart, Star, MessageCircle, Calendar, ChevronDown, Languages } from 'lucide-react';
 import { fetchGalleries } from '../api';
 import GalleryCard from '../components/GalleryCard';
 import FilterPanel from '../components/FilterPanel';
+import { useTagTranslation } from '../hooks/useTagTranslation';
 
 const PAGE_SIZE = 100;
 
@@ -82,8 +83,8 @@ function RatingCycleButton({ value, onChange }) {
     <button
       onClick={cycle}
       className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs transition-all border ${active
-          ? 'text-amber-400 border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20'
-          : 'text-gray-400 border-white/10 hover:text-white hover:bg-white/10'
+        ? 'text-amber-400 border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20'
+        : 'text-gray-400 border-white/10 hover:text-white hover:bg-white/10'
         }`}
     >
       <Star size={13} className={active ? 'fill-amber-400' : ''} />
@@ -164,6 +165,8 @@ const GalleryPage = () => {
     tag: '',
   });
   const [viewMode, setViewMode] = useState(getInitialViewMode);
+  const [showTranslation, setShowTranslation] = useState(false);
+  const { translate } = useTagTranslation(showTranslation);
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['galleries', page, filters.category, filters.min_fav, filters.tag],
@@ -204,11 +207,36 @@ const GalleryPage = () => {
   const items = [...rawItems]
     .filter((g) => !filters.min_rating || (g.rating ?? 0) >= filters.min_rating)
     .sort(SORT_FNS[filters.sort] ?? SORT_FNS.fav_count);
+  const tagSuggestions = useMemo(() => {
+    const freq = new Map();
+    for (const gallery of items) {
+      const tagMap = gallery?.tags || {};
+      for (const [ns, values] of Object.entries(tagMap)) {
+        if (!Array.isArray(values)) continue;
+        for (const value of values) {
+          if (!value) continue;
+          const key = `${ns}:${value}`;
+          freq.set(key, (freq.get(key) || 0) + 1);
+        }
+      }
+    }
+    return [...freq.entries()]
+      .sort((a, b) => {
+        if (b[1] !== a[1]) return b[1] - a[1];
+        return a[0].localeCompare(b[0]);
+      })
+      .slice(0, 50)
+      .map(([tag]) => tag);
+  }, [items]);
 
   return (
     // pb-14 reserves space above the sticky bottom pagination bar
     <div className="pb-14">
-      <FilterPanel filters={filters} onChange={handleFilterChange} />
+      <FilterPanel
+        filters={filters}
+        onChange={handleFilterChange}
+        tagSuggestions={tagSuggestions}
+      />
 
       {/* Results bar */}
       <div className="flex items-center justify-between mb-3 px-0.5">
@@ -223,6 +251,20 @@ const GalleryPage = () => {
           )}
         </div>
         <div className="flex items-center gap-3">
+          {/* Translation toggle – only useful in list mode */}
+          {viewMode === 'list' && (
+            <button
+              onClick={() => setShowTranslation((v) => !v)}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs transition-all border ${showTranslation
+                  ? 'text-sky-400 border-sky-500/40 bg-sky-500/10 hover:bg-sky-500/20'
+                  : 'text-gray-400 border-white/10 hover:text-white hover:bg-white/10'
+                }`}
+              title="切换标签中文翻译"
+            >
+              <Languages size={13} />
+              中文
+            </button>
+          )}
           <SortDropdown
             value={filters.sort}
             onChange={(v) => setFilters((prev) => ({ ...prev, sort: v }))}
@@ -256,7 +298,7 @@ const GalleryPage = () => {
         </div>
       ) : (
         viewMode === 'grid' ? (
-          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8 gap-2">
+          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-6 gap-3">
             {items.map((gallery) => (
               <GalleryCard key={gallery.gid} gallery={gallery} viewMode="grid" />
             ))}
@@ -264,7 +306,7 @@ const GalleryPage = () => {
         ) : (
           <div className="flex flex-col gap-2">
             {items.map((gallery) => (
-              <GalleryCard key={gallery.gid} gallery={gallery} viewMode="list" onTagSearch={handleTagSearch} />
+              <GalleryCard key={gallery.gid} gallery={gallery} viewMode="list" onTagSearch={handleTagSearch} translate={showTranslation ? translate : undefined} />
             ))}
           </div>
         )

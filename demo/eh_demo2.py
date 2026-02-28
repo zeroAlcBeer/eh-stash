@@ -8,16 +8,12 @@
 # ]
 # ///
 """
-List-signal trigger probe for coarse update detection.
+Validate dm_e list parsing by comparing list-page signals against detail-page truth.
 
 Workflow:
-1) Fetch N list pages and keep only in-memory signals per gid.
-2) Wait M seconds.
-3) Fetch the same N pages again.
-4) Compare rating/tag signals and report trigger ratio:
-      triggered / comparable
-
-This is intentionally "list-only": no detail requests and no DB writes.
+1) Fetch exactly one list page.
+2) For every list item, fetch detail page one by one.
+3) Print per-item diff for title/rating/tags (list vs detail).
 """
 
 from __future__ import annotations
@@ -27,7 +23,6 @@ import asyncio
 import os
 import re
 from dataclasses import dataclass
-from typing import Iterable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from bs4 import BeautifulSoup, Tag
@@ -35,13 +30,14 @@ from curl_cffi.requests import AsyncSession
 from dotenv import load_dotenv
 
 GID_TOKEN_RE = re.compile(r"/g/(\d+)/([a-f0-9]+)/")
-NEXT_CURSOR_RE = re.compile(r"[?&]next=(\d+)")
 RATING_RE = re.compile(r"([0-5](?:\.\d+)?)")
+TOTAL_COUNT_RE = re.compile(r"Found\s+(?:about\s+)?([\d,]+)\s+results")
 TAG_CLASS_RE = re.compile(r"^gt")
+BG_POS_RE = re.compile(r"background-position\s*:\s*(-?\d+)px\s+(-?\d+)px")
 SPACE_RE = re.compile(r"\s+")
 
 DEFAULT_QUERY_TEMPLATE = "/?f_search=language%3Achinese+language%3Atranslated"
-DEFAULT_INLINE_SET = "dm_l"
+DEFAULT_INLINE_SET = "dm_e"
 INLINE_SET_SHORT = {"m", "p", "l", "e", "t"}
 
 
@@ -51,15 +47,25 @@ class ListSignal:
     token: str
     title: str
     rating_sig: str
+    rating_est: float | None
     tags: tuple[str, ...]
 
-    @property
-    def tags_sig(self) -> str:
-        return "|".join(self.tags)
+
+@dataclass(frozen=True)
+class DetailSignal:
+    title: str
+    rating: float | None
+    tags: tuple[str, ...]
 
 
 def normalize_text(value: str) -> str:
     return SPACE_RE.sub(" ", value or "").strip()
+
+
+def bucket_rating(value: float | None) -> float | None:
+    if value is None:
+        return None
+    return round(value * 2.0) / 2.0
 
 
 def parse_cookie_string(raw: str) -> dict[str, str]:
@@ -89,51 +95,53 @@ def extract_title(glname: Tag) -> str:
     return normalize_text(str(node))
 
 
-def extract_rating_sig(element: Tag) -> str:
-    # Most list styles expose a star widget .ir* with either title or style signals.
-    ir_node = element.find(class_=re.compile(r"\bir"))
-    if ir_node:
-        title = normalize_text(ir_node.get("title", ""))
-        if title:
-            match = RATING_RE.search(title)
-            if match:
-                return f"avg:{float(match.group(1)):.2f}"
-            return f"title:{title}"
-        style = normalize_text(ir_node.get("style", ""))
-        if style:
-            return f"style:{style.replace(' ', '')}"
-        classes = [c for c in (ir_node.get("class") or []) if c]
-        if classes:
-            return f"class:{','.join(sorted(classes))}"
+def extract_rating_signal(element: Tag) -> tuple[str, float | None]:
+    for ir in element.find_all(class_=re.compile(r"\bir")):
+        style = normalize_text(ir.get("style", ""))
+        matched = BG_POS_RE.search(style)
+        if matched:
+            x, y = int(matched.group(1)), int(matched.group(2))
+            if y == -1:
+                value = max(0.0, min(5.0, 5.0 - abs(x) / 16.0))
+                return f"sprite:x={x},y={y}", value
+            if y == -21:
+                value = max(0.0, min(5.0, 4.5 - abs(x) / 16.0))
+                return f"sprite:x={x},y={y}", value
 
-    # Fallback: some styles include textual rating in summary cells.
+        title = normalize_text(ir.get("title", ""))
+        if title:
+            matched = RATING_RE.search(title)
+            if matched:
+                value = float(matched.group(1))
+                return f"title:{value:.2f}", value
+
     for klass in ("gl4e", "gl4t", "gl5t", "gl5m", "gl5c"):
         node = element.find(class_=klass)
         if not node:
             continue
         text = normalize_text(node.get_text(" ", strip=True))
-        match = RATING_RE.search(text)
-        if match:
-            return f"text:{float(match.group(1)):.2f}"
-    return ""
+        matched = RATING_RE.search(text)
+        if matched:
+            value = float(matched.group(1))
+            return f"text:{value:.2f}", value
+
+    return "", None
 
 
 def extract_visible_tags(element: Tag) -> tuple[str, ...]:
     tags: set[str] = set()
 
-    # Preferred: explicit tag-like classes.
     for node in element.find_all(True):
         classes = node.get("class") or []
         if not any(TAG_CLASS_RE.match(c) for c in classes):
             continue
-        text = normalize_text(node.get_text(" ", strip=True))
+        text = normalize_text(node.get_text(" ", strip=True)).lower()
         if not text:
             continue
         if len(text) > 80:
             continue
-        tags.add(text.lower())
+        tags.add(text)
 
-    # Fallback: visible tag links in list page usually include f_search.
     if not tags:
         for a in element.find_all("a", href=True):
             href = a.get("href", "")
@@ -149,58 +157,93 @@ def extract_visible_tags(element: Tag) -> tuple[str, ...]:
     return tuple(sorted(tags))
 
 
-def parse_next_cursor(soup: BeautifulSoup) -> int | None:
-    dnext = soup.find(id="dnext")
-    if not dnext:
-        return None
-    href = dnext.get("href", "")
-    match = NEXT_CURSOR_RE.search(href)
-    if not match:
-        return None
-    return int(match.group(1))
-
-
 def parse_list_page(html: str) -> tuple[list[ListSignal], int | None]:
     soup = BeautifulSoup(html, "lxml")
     itg = soup.find(class_="itg")
     if not itg:
         return [], None
 
-    signals: list[ListSignal] = []
+    total_count: int | None = None
+    matched = TOTAL_COUNT_RE.search(html)
+    if matched:
+        total_count = int(matched.group(1).replace(",", ""))
+
+    items: list[ListSignal] = []
     for element in itg.find_all(recursive=False):
         glname = element.find(class_="glname")
         if not glname:
             continue
 
-        a = glname.find("a")
-        if a is None:
+        link = glname.find("a")
+        if link is None:
             parent = glname.parent
             if parent and parent.name == "a":
-                a = parent
-        if a is None:
+                link = parent
+        if link is None:
             continue
 
-        href = a.get("href", "")
-        match = GID_TOKEN_RE.search(href)
-        if not match:
+        href = link.get("href", "")
+        matched = GID_TOKEN_RE.search(href)
+        if not matched:
             continue
 
-        gid = int(match.group(1))
-        token = match.group(2)
+        gid = int(matched.group(1))
+        token = matched.group(2)
         title = extract_title(glname)
-        rating_sig = extract_rating_sig(element)
+        rating_sig, rating_est = extract_rating_signal(element)
         tags = extract_visible_tags(element)
-
-        signals.append(
+        items.append(
             ListSignal(
                 gid=gid,
                 token=token,
                 title=title,
                 rating_sig=rating_sig,
+                rating_est=rating_est,
                 tags=tags,
             )
         )
-    return signals, parse_next_cursor(soup)
+
+    return items, total_count
+
+
+def parse_detail_page(html: str) -> DetailSignal:
+    soup = BeautifulSoup(html, "lxml")
+    gm = soup.find(class_="gm")
+    if not gm:
+        return DetailSignal(title="", rating=None, tags=())
+
+    gn = gm.find(id="gn")
+    title = normalize_text(gn.get_text(" ", strip=True)) if gn else ""
+
+    rating: float | None = None
+    rating_label = gm.find(id="rating_label")
+    if rating_label:
+        text = normalize_text(rating_label.get_text(" ", strip=True))
+        if "Not Yet Rated" not in text:
+            matched = RATING_RE.search(text)
+            if matched:
+                rating = float(matched.group(1))
+
+    detail_tags: set[str] = set()
+    taglist = soup.find(id="taglist")
+    if taglist:
+        for tr in taglist.find_all("tr"):
+            tds = tr.find_all("td")
+            if len(tds) < 2:
+                continue
+            for div in tds[1].find_all("div"):
+                a = div.find("a")
+                if not a:
+                    continue
+                text = normalize_text(a.get_text(" ", strip=True)).lower()
+                if text:
+                    detail_tags.add(text)
+
+    return DetailSignal(
+        title=title,
+        rating=rating,
+        tags=tuple(sorted(detail_tags)),
+    )
 
 
 def normalize_inline_set(inline_set: str) -> str:
@@ -243,171 +286,97 @@ def build_start_url(base_url: str, query_template: str, inline_set: str) -> str:
     if not query.startswith("/"):
         query = "/" + query
     url = base + query
-    url = strip_query_keys(url, {"page"})
+    url = strip_query_keys(url, {"page", "next"})
     return apply_inline_set(url, inline_set)
 
 
-def build_next_url(current_url: str, next_cursor: int | None) -> str | None:
-    if next_cursor is None:
-        return None
-    split = urlsplit(current_url)
-    query = dict(parse_qsl(split.query, keep_blank_values=True))
-    query.pop("page", None)
-    query["next"] = str(next_cursor)
-    return urlunsplit(
-        (split.scheme, split.netloc, split.path, urlencode(query, doseq=True), split.fragment)
-    )
-
-
-async def fetch_page_signals(
+async def fetch_first_list_page(
     client: AsyncSession,
     url: str,
-    step: int,
 ) -> tuple[list[ListSignal], int | None]:
-    print(f"[LIST ] step={step:2d}  {url}")
+    print(f"[LIST ] GET {url}")
     resp = await client.get(url, timeout=30)
     resp.raise_for_status()
-    signals, next_cursor = parse_list_page(resp.text)
-
-    with_rating = sum(1 for s in signals if s.rating_sig)
-    with_tags = sum(1 for s in signals if s.tags)
+    items, total_count = parse_list_page(resp.text)
+    with_rating = sum(1 for s in items if s.rating_est is not None)
+    with_tags = sum(1 for s in items if s.tags)
     print(
-        f"        -> items={len(signals)} rating_detected={with_rating} "
-        f"tags_detected={with_tags} next={next_cursor if next_cursor is not None else '-'}"
+        f"[LIST ] items={len(items)} total_count={total_count if total_count is not None else '-'} "
+        f"rating_detected={with_rating} tags_detected={with_tags}"
     )
-    return signals, next_cursor
+    return items, total_count
 
 
-async def collect_snapshot(
+async def fetch_detail_signal(
     client: AsyncSession,
-    *,
-    name: str,
-    pages: int,
     base_url: str,
-    query_template: str,
-    inline_set: str,
-    list_interval: float,
-) -> dict[int, ListSignal]:
-    print(f"\n=== {name}: collecting {pages} pages ===")
-    snapshot: dict[int, ListSignal] = {}
-    current_url = build_start_url(base_url, query_template, inline_set)
-
-    for step in range(pages):
-        try:
-            signals, next_cursor = await fetch_page_signals(client, current_url, step)
-        except Exception as exc:
-            print(f"[WARN ] step={step} fetch failed: {exc}")
-            continue
-
-        for signal in signals:
-            # Keep first occurrence if gid appears multiple times in the sample window.
-            snapshot.setdefault(signal.gid, signal)
-
-        if step < pages - 1:
-            current_url = build_next_url(current_url, next_cursor)
-            if current_url is None:
-                print(f"[INFO ] {name}: no dnext cursor at step={step}, stop early.")
-                break
-            if list_interval > 0:
-                await asyncio.sleep(list_interval)
-
-    print(f"[INFO ] {name}: unique_gids={len(snapshot)}")
-    return snapshot
+    gid: int,
+    token: str,
+) -> DetailSignal | None:
+    url = f"{base_url.rstrip('/')}/g/{gid}/{token}/"
+    try:
+        resp = await client.get(url, timeout=30)
+        resp.raise_for_status()
+    except Exception as exc:
+        print(f"[WARN ] gid={gid} detail fetch failed: {exc}")
+        return None
+    return parse_detail_page(resp.text)
 
 
-def wait_steps(seconds: int, step: int = 30) -> Iterable[int]:
-    remaining = seconds
-    while remaining > 0:
-        chunk = step if remaining >= step else remaining
-        yield chunk
-        remaining -= chunk
+def format_rating(value: float | None) -> str:
+    if value is None:
+        return "-"
+    return f"{value:.1f}"
 
 
-async def controlled_wait(seconds: int) -> None:
-    if seconds <= 0:
-        return
-    print(f"\n=== waiting {seconds} seconds before second snapshot ===")
-    waited = 0
-    for chunk in wait_steps(seconds):
-        await asyncio.sleep(chunk)
-        waited += chunk
-        print(f"[WAIT ] {waited}/{seconds} sec")
+def format_tags(tags: tuple[str, ...], limit: int = 8) -> str:
+    if not tags:
+        return "-"
+    if len(tags) <= limit:
+        return ", ".join(tags)
+    return ", ".join(tags[:limit]) + f", ... (+{len(tags) - limit})"
 
 
-def compare_snapshots(
-    first: dict[int, ListSignal],
-    second: dict[int, ListSignal],
-) -> tuple[list[tuple[int, ListSignal, ListSignal, list[str]]], int, int, int]:
-    common_gids = sorted(set(first) & set(second))
-    changed: list[tuple[int, ListSignal, ListSignal, list[str]]] = []
+def print_diff(
+    idx: int,
+    item: ListSignal,
+    detail: DetailSignal,
+) -> tuple[bool, bool, bool]:
+    list_rating = bucket_rating(item.rating_est)
+    detail_rating = bucket_rating(detail.rating)
+    rating_diff = list_rating != detail_rating
 
-    for gid in common_gids:
-        before = first[gid]
-        after = second[gid]
-        reasons: list[str] = []
-        if before.rating_sig != after.rating_sig:
-            reasons.append("rating")
-        if before.tags_sig != after.tags_sig:
-            reasons.append("tags")
-        if reasons:
-            changed.append((gid, before, after, reasons))
+    list_tags = set(item.tags)
+    detail_tags = set(detail.tags)
+    missing = sorted(list_tags - detail_tags)
+    extra = sorted(detail_tags - list_tags)
+    tags_diff = bool(missing)
 
-    new_in_second = len(set(second) - set(first))
-    missing_in_second = len(set(first) - set(second))
-    return changed, len(common_gids), new_in_second, missing_in_second
+    title_diff = bool(detail.title and normalize_text(item.title) != normalize_text(detail.title))
 
+    print(f"\n[{idx:02d}] gid={item.gid}")
+    print(f"  title(list):   {item.title or '-'}")
+    print(f"  title(detail): {detail.title or '-'}")
+    print(
+        f"  rating: list={format_rating(list_rating)} ({item.rating_sig or '-'}) "
+        f"detail={format_rating(detail_rating)} -> {'DIFF' if rating_diff else 'OK'}"
+    )
+    print(
+        f"  tags:   list={len(list_tags)} detail={len(detail_tags)} "
+        f"missing={len(missing)} extra={len(extra)} -> {'DIFF' if tags_diff else 'OK'}"
+    )
+    if missing:
+        print(f"    missing_in_detail: {format_tags(tuple(missing))}")
+    if extra:
+        print(f"    extra_in_detail:   {format_tags(tuple(extra))}")
 
-def print_report(
-    changed: list[tuple[int, ListSignal, ListSignal, list[str]]],
-    comparable_total: int,
-    new_in_second: int,
-    missing_in_second: int,
-    sample_limit: int,
-) -> None:
-    triggered = len(changed)
-    ratio = (triggered / comparable_total * 100.0) if comparable_total else 0.0
-
-    print("\n=== comparison report ===")
-    print(f"comparable_total = {comparable_total}")
-    print(f"triggered        = {triggered}")
-    print(f"trigger_ratio    = {ratio:.2f}%")
-    print(f"new_in_second    = {new_in_second}")
-    print(f"missing_in_second= {missing_in_second}")
-
-    if comparable_total == 0:
-        print("[WARN ] No comparable gids between two snapshots.")
-        return
-
-    if ratio == 0.0:
-        print("[RESULT] Trigger ratio is 0.00%; this signal set is likely too weak here.")
-    else:
-        print("[RESULT] Non-zero trigger ratio observed.")
-
-    if not changed:
-        return
-
-    print("\n=== changed samples ===")
-    for idx, (gid, before, after, reasons) in enumerate(changed[:sample_limit], start=1):
-        print(
-            f"{idx:2d}. gid={gid} reasons={','.join(reasons)} "
-            f"rating {before.rating_sig or '-'} -> {after.rating_sig or '-'} "
-            f"tags {len(before.tags)} -> {len(after.tags)}"
-        )
+    return rating_diff, tags_diff, title_diff
 
 
 async def main() -> None:
     load_dotenv()
 
-    parser = argparse.ArgumentParser(description="List signal trigger probe (rating/tags).")
-    parser.add_argument(
-        "--pages",
-        type=int,
-        default=10,
-        help="How many cursor pages (next=<gid> hops) to fetch per snapshot.",
-    )
-    parser.add_argument("--wait-seconds", type=int, default=180, help="Wait between two snapshots.")
-    parser.add_argument("--list-interval", type=float, default=1.0, help="Delay between page fetches.")
-    parser.add_argument("--sample-limit", type=int, default=20, help="Max changed samples to print.")
+    parser = argparse.ArgumentParser(description="Validate dm_e list parsing via list vs detail diff.")
     parser.add_argument(
         "--base-url",
         default=os.getenv("EX_BASE_URL", "https://e-hentai.org"),
@@ -416,26 +385,38 @@ async def main() -> None:
     parser.add_argument(
         "--query-template",
         default=DEFAULT_QUERY_TEMPLATE,
-        help="Initial path/query for the first page. Pagination then follows dnext (next=<gid>).",
+        help="One list page to fetch (next/page params are ignored).",
     )
     parser.add_argument(
         "--inline-set",
         default=DEFAULT_INLINE_SET,
-        help=(
-            "Force list display mode via inline_set. "
-            "Use dm_l/dm_p/dm_e or short form l/p/e. "
-            "Use keep/off/none to preserve server default."
-        ),
+        help="List display mode. Recommended: dm_e (or short: e).",
+    )
+    parser.add_argument(
+        "--detail-interval",
+        type=float,
+        default=1.0,
+        help="Delay seconds between detail requests.",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="Only validate first N items from list page (0 means all).",
     )
     args = parser.parse_args()
-    if "{page}" in args.query_template or "page=" in args.query_template:
-        print("[WARN ] query-template contains page. EH pagination uses next=<gid>; page is ignored/removed.")
 
     cookies = parse_cookie_string(os.getenv("EX_COOKIES", ""))
     if cookies:
         print(f"[INFO ] cookies loaded: keys={sorted(cookies.keys())}")
     else:
         print("[INFO ] no cookies loaded from EX_COOKIES.")
+
+    resolved_inline_set = normalize_inline_set(args.inline_set)
+    if args.inline_set.strip().lower() in {"keep", "off", "none"}:
+        print("[INFO ] inline_set mode: keep server default")
+    else:
+        print(f"[INFO ] inline_set mode: {resolved_inline_set}")
 
     headers = {
         "User-Agent": (
@@ -446,11 +427,6 @@ async def main() -> None:
         "Accept-Language": "en-US,en;q=0.9",
         "Referer": args.base_url,
     }
-    resolved_inline_set = normalize_inline_set(args.inline_set)
-    if args.inline_set.strip().lower() in {"keep", "off", "none"}:
-        print("[INFO ] inline_set mode: keep server default")
-    else:
-        print(f"[INFO ] inline_set mode: {resolved_inline_set}")
 
     async with AsyncSession(
         headers=headers,
@@ -460,36 +436,43 @@ async def main() -> None:
         impersonate="chrome",
         verify=False,
     ) as client:
-        first = await collect_snapshot(
-            client,
-            name="SNAPSHOT#1",
-            pages=args.pages,
-            base_url=args.base_url,
-            query_template=args.query_template,
-            inline_set=args.inline_set,
-            list_interval=args.list_interval,
-        )
+        start_url = build_start_url(args.base_url, args.query_template, args.inline_set)
+        items, _ = await fetch_first_list_page(client, start_url)
 
-        await controlled_wait(args.wait_seconds)
+        if not items:
+            print("[WARN ] no items parsed from list page.")
+            return
 
-        second = await collect_snapshot(
-            client,
-            name="SNAPSHOT#2",
-            pages=args.pages,
-            base_url=args.base_url,
-            query_template=args.query_template,
-            inline_set=args.inline_set,
-            list_interval=args.list_interval,
-        )
+        if args.limit > 0:
+            items = items[: args.limit]
+            print(f"[INFO ] limiting to first {len(items)} items")
 
-    changed, comparable_total, new_in_second, missing_in_second = compare_snapshots(first, second)
-    print_report(
-        changed,
-        comparable_total=comparable_total,
-        new_in_second=new_in_second,
-        missing_in_second=missing_in_second,
-        sample_limit=args.sample_limit,
-    )
+        rating_diff_count = 0
+        tags_diff_count = 0
+        title_diff_count = 0
+        detail_fail_count = 0
+
+        print(f"\n=== validating {len(items)} items ===")
+        for idx, item in enumerate(items, start=1):
+            detail = await fetch_detail_signal(client, args.base_url, item.gid, item.token)
+            if detail is None:
+                detail_fail_count += 1
+                continue
+
+            rating_diff, tags_diff, title_diff = print_diff(idx, item, detail)
+            rating_diff_count += int(rating_diff)
+            tags_diff_count += int(tags_diff)
+            title_diff_count += int(title_diff)
+
+            if idx < len(items) and args.detail_interval > 0:
+                await asyncio.sleep(args.detail_interval)
+
+    print("\n=== summary ===")
+    print(f"items_total        = {len(items)}")
+    print(f"detail_fetch_fail  = {detail_fail_count}")
+    print(f"rating_diff_count  = {rating_diff_count}")
+    print(f"tags_diff_count    = {tags_diff_count}")
+    print(f"title_diff_count   = {title_diff_count}")
 
 
 if __name__ == "__main__":

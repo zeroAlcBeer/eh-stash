@@ -33,23 +33,27 @@ const NS_ORDER = ['artist', 'group', 'parody', 'character', 'female', 'male', 'l
 // ─── Grid Card ────────────────────────────────────────────────────────────────
 
 function GridCard({ gallery }) {
-  const { gid, token, title, category, rating, fav_count, thumb } = gallery;
+  const { gid, token, title, title_jpn, category, rating, fav_count, thumb, posted_at } = gallery;
+  const displayTitle = title_jpn || title;
   const exUrl = getExUrl(gid, token);
   const catStyle = CATEGORY_STYLES[category] || CATEGORY_STYLES['Misc'];
+  const date = posted_at
+    ? new Date(posted_at).toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
+    : null;
 
   return (
     <a
       href={exUrl}
       target={isAndroid ? '_self' : '_blank'}
       rel="noopener noreferrer"
-      className="group block rounded-lg overflow-hidden bg-zinc-900 ring-1 ring-white/5 hover:ring-amber-400/60 transition-all duration-150"
-      title={title}
+      className="group flex flex-col rounded-lg overflow-hidden bg-zinc-900 ring-1 ring-white/5 hover:ring-amber-400/60 transition-all duration-150"
+      title={displayTitle}
     >
       {/* Cover */}
       <div className="relative" style={{ paddingTop: '140%' }}>
         <img
           src={thumb ? `/v1/thumbs/${gid}` : FALLBACK_IMAGE}
-          alt={title}
+          alt={displayTitle}
           onError={(e) => { e.target.onerror = null; e.target.src = FALLBACK_IMAGE; }}
           className="absolute inset-0 w-full h-full object-contain bg-zinc-950"
           loading="lazy"
@@ -60,16 +64,23 @@ function GridCard({ gallery }) {
         </span>
       </div>
 
-      {/* Meta */}
-      <div className="p-1.5 space-y-1">
-        <p className="text-[11px] leading-tight text-gray-300 line-clamp-2 font-medium">{title}</p>
-        <div className="flex items-center gap-2 text-[10px] text-gray-500">
-          <span className="flex items-center gap-0.5 text-amber-400">
-            <Star size={9} className="fill-amber-400" />{rating?.toFixed(1) ?? '-'}
-          </span>
-          <span className="flex items-center gap-0.5 text-rose-400">
-            <Heart size={9} className="fill-rose-400" />{fav_count ?? '-'}
-          </span>
+      {/* Meta — flex-1 so it fills remaining height; justify-between pins stats to bottom */}
+      <div className="p-1.5 flex flex-col flex-1 gap-1">
+        <p className="text-[11px] leading-tight text-gray-300 line-clamp-2 font-medium flex-1">{displayTitle}</p>
+        <div className="flex items-center justify-between text-[10px] text-gray-500">
+          <div className="flex items-center gap-2">
+            <span className="flex items-center gap-0.5 text-amber-400">
+              <Star size={9} className="fill-amber-400" />{rating?.toFixed(1) ?? '-'}
+            </span>
+            <span className="flex items-center gap-0.5 text-rose-400">
+              <Heart size={9} className="fill-rose-400" />{fav_count ?? '-'}
+            </span>
+          </div>
+          {date && (
+            <span className="flex items-center gap-0.5 text-gray-600">
+              <Calendar size={9} />{date}
+            </span>
+          )}
         </div>
       </div>
     </a>
@@ -78,9 +89,10 @@ function GridCard({ gallery }) {
 
 // ─── List Row ─────────────────────────────────────────────────────────────────
 
-function ListRow({ gallery, onTagSearch }) {
-  const { gid, token, title, category, rating, fav_count, comment_count,
+function ListRow({ gallery, onTagSearch, translate }) {
+  const { gid, token, title, title_jpn, category, rating, fav_count, comment_count,
     thumb, posted_at, uploader, pages, language, tags } = gallery;
+  const displayTitle = title_jpn || title;
   const exUrl = getExUrl(gid, token);
   const catStyle = CATEGORY_STYLES[category] || CATEGORY_STYLES['Misc'];
 
@@ -122,7 +134,7 @@ function ListRow({ gallery, onTagSearch }) {
             rel="noopener noreferrer"
             className="text-sm font-medium text-gray-200 hover:text-white line-clamp-2 leading-snug"
           >
-            {title}
+            {displayTitle}
           </a>
           <a
             href={exUrl}
@@ -173,19 +185,30 @@ function ListRow({ gallery, onTagSearch }) {
           )}
         </div>
 
-        {/* Tags */}
+        {/* Tags – grouped by namespace */}
         {nsKeys.length > 0 && (
-          <div className="flex flex-wrap gap-1">
-            {nsKeys.map((ns) =>
-              (tagMap[ns] || []).map((v) => (
-                <TagBadge
-                  key={`${ns}:${v}`}
-                  namespace={ns}
-                  value={v}
-                  onClick={() => onTagSearch?.(`${ns}:${v}`)}
-                />
-              ))
-            )}
+          <div className="flex flex-col gap-0.5">
+            {nsKeys.map((ns) => (
+              <div key={ns} className="flex items-start gap-1.5">
+                {/* Namespace label */}
+                <span className="shrink-0 text-[10px] text-gray-600 w-[3.5rem] text-right leading-[1.6rem] select-none">
+                  {ns}
+                </span>
+                {/* Tags for this namespace */}
+                <div className="flex flex-wrap gap-1">
+                  {(tagMap[ns] || []).map((v) => (
+                    <TagBadge
+                      key={`${ns}:${v}`}
+                      namespace={ns}
+                      value={v}
+                      translation={translate ? translate(v) : undefined}
+                      showNs={false}
+                      onClick={() => onTagSearch?.(`${ns}:${v}`)}
+                    />
+                  ))}
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </div>
@@ -195,9 +218,9 @@ function ListRow({ gallery, onTagSearch }) {
 
 // ─── Export ───────────────────────────────────────────────────────────────────
 
-const GalleryCard = ({ gallery, viewMode = 'grid', onTagSearch }) => {
+const GalleryCard = ({ gallery, viewMode = 'grid', onTagSearch, translate }) => {
   if (viewMode === 'list') {
-    return <ListRow gallery={gallery} onTagSearch={onTagSearch} />;
+    return <ListRow gallery={gallery} onTagSearch={onTagSearch} translate={translate} />;
   }
   return <GridCard gallery={gallery} />;
 };

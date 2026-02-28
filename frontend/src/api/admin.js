@@ -46,8 +46,8 @@ export function stopTask(id) {
   });
 }
 
-export function deleteTask(id) {
-  return request(`/tasks/${id}`, {
+export function deleteTask(id, confirm = false) {
+  return request(`/tasks/${id}?confirm=${confirm ? 'true' : 'false'}`, {
     method: 'DELETE',
   });
 }

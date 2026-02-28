@@ -1,1 +1,31 @@
 @import "tailwindcss";
+
+/* ── Auto-refresh ring animation ───────────────────────────────────────────── */
+/* Draws a circular stroke over 5 s (matching refetchInterval).                */
+/* circumference of r=13 circle: 2π×13 ≈ 81.68                                */
+@keyframes refresh-ring {
+    from {
+        stroke-dashoffset: 81.68;
+    }
+
+    to {
+        stroke-dashoffset: 0;
+    }
+}
+
+/* Pulses the ring colour to sky-blue just before the next fetch fires.        */
+@keyframes refresh-ring-pulse {
+
+    0%,
+    78% {
+        stroke: rgba(255, 255, 255, 0.15);
+    }
+
+    88% {
+        stroke: rgba(99, 179, 237, 0.55);
+    }
+
+    100% {
+        stroke: rgba(255, 255, 255, 0.15);
+    }
+}

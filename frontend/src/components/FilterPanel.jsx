@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Search, X, ChevronDown, ChevronUp, SlidersHorizontal } from 'lucide-react';
 
 const CATEGORIES = [
@@ -30,15 +30,28 @@ function SelectField({ value, onChange, children, className = '' }) {
   );
 }
 
-const FilterPanel = ({ filters, onChange }) => {
+const SUGGESTION_LIMIT = 8;
+
+const FilterPanel = ({ filters, onChange, tagSuggestions = [] }) => {
   const [collapsed, setCollapsed] = useState(true);
   const [tagInput, setTagInput] = useState(filters.tag || '');
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [activeSuggestion, setActiveSuggestion] = useState(-1);
   const tagInputRef = useRef(null);
 
   // Sync external tag changes (e.g. from tag badge clicks)
   useEffect(() => {
     setTagInput(filters.tag || '');
+    setActiveSuggestion(-1);
   }, [filters.tag]);
+
+  const filteredSuggestions = useMemo(() => {
+    const keyword = tagInput.trim().toLowerCase();
+    const hits = keyword
+      ? tagSuggestions.filter((tag) => tag.toLowerCase().includes(keyword))
+      : tagSuggestions;
+    return hits.slice(0, SUGGESTION_LIMIT);
+  }, [tagInput, tagSuggestions]);
 
   const set = (field) => (e) => onChange({ ...filters, [field]: e.target.value });
 
@@ -47,8 +60,17 @@ const FilterPanel = ({ filters, onChange }) => {
     if (val !== filters.tag) onChange({ ...filters, tag: val });
   };
 
+  const selectSuggestion = (value) => {
+    setTagInput(value);
+    setShowSuggestions(false);
+    setActiveSuggestion(-1);
+    if (value !== filters.tag) onChange({ ...filters, tag: value });
+  };
+
   const clearTag = () => {
     setTagInput('');
+    setShowSuggestions(false);
+    setActiveSuggestion(-1);
     onChange({ ...filters, tag: '' });
   };
 
@@ -61,7 +83,7 @@ const FilterPanel = ({ filters, onChange }) => {
 
   return (
     <div className="sticky top-12 z-30 mb-3">
-      <div className="rounded-xl border border-white/10 bg-zinc-900/90 backdrop-blur-md overflow-hidden">
+      <div className="rounded-xl border border-white/10 bg-zinc-900/90 backdrop-blur-md">
 
         {/* ── Header (always visible) ── */}
         <button
@@ -112,39 +134,99 @@ const FilterPanel = ({ filters, onChange }) => {
           {/* Tag search */}
           <div className="flex flex-col gap-1 flex-1 min-w-[160px]">
             <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider">Tag</label>
-            <div className="relative flex items-center">
-              <Search size={13} className="absolute left-2.5 text-gray-500 pointer-events-none" />
-              <input
-                ref={tagInputRef}
-                type="text"
-                value={tagInput}
-                onChange={(e) => setTagInput(e.target.value)}
-                onBlur={commitTag}
-                onKeyDown={(e) => { if (e.key === 'Enter') { commitTag(); e.target.blur(); } }}
-                placeholder="female:solo"
-                className="w-full pl-8 pr-7 py-1.5 rounded-lg bg-white/5 border border-white/10 text-white text-sm
-                           placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/40 transition-all"
-              />
-              {tagInput && (
-                <button
-                  type="button"
-                  onClick={clearTag}
-                  className="absolute right-2 text-gray-500 hover:text-white transition-colors"
-                >
-                  <X size={13} />
-                </button>
+            <div className="relative">
+              <div className="relative flex items-center">
+                <Search size={13} className="absolute left-2.5 text-gray-500 pointer-events-none" />
+                <input
+                  ref={tagInputRef}
+                  type="text"
+                  value={tagInput}
+                  onChange={(e) => {
+                    setTagInput(e.target.value);
+                    setShowSuggestions(true);
+                    setActiveSuggestion(-1);
+                  }}
+                  onFocus={() => {
+                    setShowSuggestions(true);
+                  }}
+                  onBlur={() => {
+                    commitTag();
+                    setTimeout(() => {
+                      setShowSuggestions(false);
+                      setActiveSuggestion(-1);
+                    }, 100);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') {
+                      setShowSuggestions(false);
+                      setActiveSuggestion(-1);
+                      return;
+                    }
+
+                    if (e.key === 'ArrowDown') {
+                      if (!filteredSuggestions.length) return;
+                      e.preventDefault();
+                      setShowSuggestions(true);
+                      setActiveSuggestion((prev) => (prev + 1) % filteredSuggestions.length);
+                      return;
+                    }
+
+                    if (e.key === 'ArrowUp') {
+                      if (!filteredSuggestions.length) return;
+                      e.preventDefault();
+                      setShowSuggestions(true);
+                      setActiveSuggestion((prev) => (
+                        prev <= 0 ? filteredSuggestions.length - 1 : prev - 1
+                      ));
+                      return;
+                    }
+
+                    if (e.key === 'Enter') {
+                      if (showSuggestions && activeSuggestion >= 0 && filteredSuggestions[activeSuggestion]) {
+                        e.preventDefault();
+                        selectSuggestion(filteredSuggestions[activeSuggestion]);
+                        return;
+                      }
+                      commitTag();
+                      e.currentTarget.blur();
+                    }
+                  }}
+                  placeholder="female:solo"
+                  className="w-full pl-8 pr-7 py-1.5 rounded-lg bg-white/5 border border-white/10 text-white text-sm
+                             placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/40 transition-all"
+                />
+                {tagInput && (
+                  <button
+                    type="button"
+                    onClick={clearTag}
+                    className="absolute right-2 text-gray-500 hover:text-white transition-colors"
+                  >
+                    <X size={13} />
+                  </button>
+                )}
+              </div>
+              {showSuggestions && filteredSuggestions.length > 0 && (
+                <div className="absolute top-full mt-1 z-40 w-full rounded-lg border border-white/10 bg-zinc-900 shadow-xl overflow-hidden">
+                  {filteredSuggestions.map((suggestion, idx) => (
+                    <button
+                      key={suggestion}
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => selectSuggestion(suggestion)}
+                      className={`w-full px-3 py-2 text-left text-xs transition-colors ${
+                        idx === activeSuggestion
+                          ? 'bg-blue-500/20 text-blue-200'
+                          : 'text-gray-300 hover:bg-white/10 hover:text-white'
+                      }`}
+                    >
+                      {suggestion}
+                    </button>
+                  ))}
+                </div>
               )}
             </div>
-            {/* Active tag pill */}
-            {filters.tag && (
-              <div className="mt-1 flex items-center gap-1">
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-300 text-[11px] ring-1 ring-blue-500/30">
-                  {filters.tag}
-                  <button type="button" onClick={clearTag} className="hover:text-white">
-                    <X size={10} />
-                  </button>
-                </span>
-              </div>
+            {showSuggestions && filteredSuggestions.length === 0 && tagInput.trim() && (
+              <div className="mt-1 text-[11px] text-gray-500">无匹配 tag</div>
             )}
           </div>
 

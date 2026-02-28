@@ -11,15 +11,28 @@ const NS_COLORS = {
     misc: 'bg-zinc-800/60 text-zinc-300 ring-zinc-500/30',
 };
 
-const TagBadge = ({ namespace, value, onClick }) => {
+/**
+ * @param {string}  namespace  - tag namespace (artist / female / …)
+ * @param {string}  value      - tag value (English)
+ * @param {string}  [translation] - translated label to show instead (Chinese)
+ * @param {boolean} [showNs=true] - whether to render the "ns:" prefix
+ * @param {() => void} [onClick]
+ */
+const TagBadge = ({ namespace, value, translation, showNs = true, onClick }) => {
     const colors = NS_COLORS[namespace] || NS_COLORS.misc;
+    const label = translation || value;
+    // show original English value as tooltip when a translation replaces it
+    const titleAttr = translation ? value : undefined;
+
     return (
         <button
             type="button"
             onClick={onClick}
+            title={titleAttr}
             className={`inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium ring-1 transition-opacity hover:opacity-80 ${colors}`}
         >
-            <span className="opacity-50 mr-0.5">{namespace}:</span>{value}
+            {showNs && <span className="opacity-50 mr-0.5">{namespace}:</span>}
+            {label}
         </button>
     );
 };

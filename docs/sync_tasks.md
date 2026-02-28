@@ -93,7 +93,7 @@ CREATE INDEX IF NOT EXISTS idx_thumb_queue_pending
 ```jsonc
 {
   "rate_interval": 1.0,       // 请求间隔秒数
-  "inline_set": "dm_l",       // ExHentai 列表展示模式
+  "inline_set": "dm_e",       // ExHentai 列表展示模式
   "start_gid": null            // 可选，起始 GID（从此 GID 向旧方向遍历）
 }
 ```
@@ -103,9 +103,9 @@ CREATE INDEX IF NOT EXISTS idx_thumb_queue_pending
 ```jsonc
 {
   "rate_interval": 1.0,
-  "inline_set": "dm_l",
-  "detail_quota": 25,          // 每 turn detail 请求额度
-  "gid_window": 10000,         // 每轮跟进窗口: latest_gid - window
+  "inline_set": "dm_e",
+
+  "scan_window": 10000,        // 每轮扫描的 item 条数
   "rating_diff_threshold": 0.5 // 粗粒度评分变化阈值
 }
 ```
@@ -130,7 +130,7 @@ CREATE INDEX IF NOT EXISTS idx_thumb_queue_pending
   "next_gid": null,
   "round": 0,
   "latest_gid": null,
-  "cutoff_gid": null
+  "scanned_count": 0
 }
 ```
 
@@ -170,8 +170,8 @@ Worker 启动
 | `rate_interval` | 下一次 `asyncio.sleep` | 逐请求参数，每页边界重载 |
 | `inline_set` | 下一次列表页请求 | 逐请求参数 |
 | `rating_diff_threshold` | 下一次比较判断 | 逐请求参数 |
-| `detail_quota` | 下一个 turn | 逐轮参数，当前 turn 按旧值跑完 |
-| `gid_window` | 下一个 cycle | 逐轮参数，当前 cycle 按旧值跑完 |
+
+| `scan_window` | 下一个 cycle | 逐轮参数，当前 cycle 按旧值跑完 |
 | `start_gid` | 不可热更新 | 只在创建时生效，运行中改无语义 |
 
 **实现方式**：每页开始时执行一次 `SELECT config, desired_status FROM sync_tasks WHERE id = %s`，解构到局部变量。逐轮参数在 turn/cycle 开始时绑定一次。
@@ -181,7 +181,7 @@ Worker 启动
 | 任务类型 | 算法 |
 |---------|------|
 | full | 首页请求后记录 `anchor_gid`（最大 GID）。`progress = (anchor_gid - current_cursor) / anchor_gid × 100`。到末页或无内容时 100%。 |
-| incremental | 一轮内：`(latest_gid - cursor) / (latest_gid - cutoff_gid) × 100`。轮次完成后进度重置为 0（循环周期）。 |
+| incremental | `scanned_count / scan_window × 100`。轮次完成后进度重置为 0（循环周期）。 |
 
 ### 4.5 任务创建时的初始 state
 
@@ -199,7 +199,7 @@ def init_state(task_type: str, config: dict) -> dict:
             "next_gid": None,
             "round": 0,
             "latest_gid": None,
-            "cutoff_gid": None,
+            "scanned_count": 0,
         }
 ```
 
@@ -278,7 +278,7 @@ GET    /v1/admin/thumb-queue/stats  队列统计 {pending, processing, done, fai
   "category": "Manga",
   "config": {
     "rate_interval": 1.0,
-    "inline_set": "dm_l",
+    "inline_set": "dm_e",
     "start_gid": 3000000
   }
 }
@@ -291,7 +291,7 @@ GET    /v1/admin/thumb-queue/stats  队列统计 {pending, processing, done, fai
   "category": "Manga",
   "status": "stopped",
   "desired_status": "stopped",
-  "config": {"rate_interval": 1.0, "inline_set": "dm_l", "start_gid": 3000000},
+  "config": {"rate_interval": 1.0, "inline_set": "dm_e", "start_gid": 3000000},
   "state": {"next_gid": 3000000, "round": 0, "done": false, "anchor_gid": null},
   "progress_pct": 0,
   "created_at": "...",

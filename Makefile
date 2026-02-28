@@ -129,8 +129,8 @@ portainer-redeploy:
 		| jq .; \
 	echo "--> Stack redeployed."
 
-# Restart a specific service container in Portainer without full stack redeploy
-# Usage: make portainer-redeploy-service PORTAINER_API_KEY=xxx PORTAINER_STACK_NAME=eh-stash SERVICE=scraper
+# Remove and recreate a specific service/container in Portainer stack
+# Usage: make portainer-redeploy-service PORTAINER_API_KEY=your_api_key PORTAINER_STACK_NAME=your_stack SERVICE=frontend
 portainer-redeploy-service:
 	@echo "--> Redeploying service '$(SERVICE)' in stack '$(PORTAINER_STACK_NAME)'..."
 	@if [ -z "$(PORTAINER_API_KEY)" ]; then echo "Error: PORTAINER_API_KEY required."; exit 1; fi
@@ -179,7 +179,7 @@ help:
 	@echo "  portainer-redeploy          Redeploy entire stack"
 	@echo "    PORTAINER_STACK_NAME=xxx  PORTAINER_API_KEY=xxx"
 	@echo "  portainer-redeploy-service  Restart one service and redeploy"
-	@echo "    PORTAINER_STACK_NAME=xxx  PORTAINER_API_KEY=xxx  SERVICE=scraper"
+	@echo "    PORTAINER_STACK_NAME=xxx  PORTAINER_API_KEY=xxx  SERVICE=frontend"
 	@echo ""
 	@echo "Variables (override on command line or in Makefile.local):"
 	@echo "  REGISTRY_URL          (default: 192.168.0.110:5000)"

@@ -1,7 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Clock,
   Loader2,
   CheckCircle2,
   XCircle,
@@ -11,6 +10,8 @@ import {
   Plus,
   RefreshCw,
   ChevronDown,
+  AlertTriangle,
+  Info,
 } from 'lucide-react';
 import {
   createTask,
@@ -20,6 +21,7 @@ import {
   startTask,
   stopTask,
 } from '../api/admin';
+import { useCountUp } from '../hooks/useCountUp';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -30,8 +32,7 @@ const CATEGORY_OPTIONS = [
 
 const DEFAULT_FULL = { start_gid: '' };
 const DEFAULT_INCREMENTAL = {
-  detail_quota: 25,
-  gid_window: 10000,
+  scan_window: 10000,
   rating_diff_threshold: 0.5,
 };
 
@@ -47,37 +48,58 @@ function buildPayload(form) {
   return {
     ...base,
     config: {
-      detail_quota: Number(form.config.detail_quota),
-      gid_window: Number(form.config.gid_window),
+      scan_window: Number(form.config.scan_window),
       rating_diff_threshold: Number(form.config.rating_diff_threshold),
     },
   };
 }
 
+function isTransitioning(task) {
+  return (
+    (task.status === 'stopped' && task.desired_status === 'running')
+    || (task.status === 'running' && task.desired_status === 'stopped')
+  );
+}
+
+function getDisplayStatus(task) {
+  if (task.status === 'stopped' && task.desired_status === 'running') return 'starting';
+  if (task.status === 'running' && task.desired_status === 'stopped') return 'stopping';
+  return task.status;
+}
+
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
 const STATUS_CONFIG = {
-  running: { dot: 'bg-blue-400', text: 'text-blue-400', ring: 'ring-blue-500/30', bg: 'bg-blue-500/10' },
-  stopped: { dot: 'bg-gray-400', text: 'text-gray-400', ring: 'ring-gray-500/30', bg: 'bg-gray-500/10' },
-  completed: { dot: 'bg-emerald-400', text: 'text-emerald-400', ring: 'ring-emerald-500/30', bg: 'bg-emerald-500/10' },
-  error: { dot: 'bg-rose-400', text: 'text-rose-400', ring: 'ring-rose-500/30', bg: 'bg-rose-500/10' },
+  starting: { text: 'text-cyan-300', ring: 'ring-cyan-500/30', bg: 'bg-cyan-500/10' },
+  running: { text: 'text-blue-400', ring: 'ring-blue-500/30', bg: 'bg-blue-500/10' },
+  stopping: { text: 'text-amber-300', ring: 'ring-amber-500/30', bg: 'bg-amber-500/10' },
+  stopped: { text: 'text-gray-400', ring: 'ring-gray-500/30', bg: 'bg-gray-500/10' },
+  completed: { text: 'text-emerald-400', ring: 'ring-emerald-500/30', bg: 'bg-emerald-500/10' },
+  error: { text: 'text-rose-400', ring: 'ring-rose-500/30', bg: 'bg-rose-500/10' },
 };
 
 function StatusBadge({ status }) {
   const cfg = STATUS_CONFIG[status] || STATUS_CONFIG.stopped;
+  const spinning = status === 'starting' || status === 'stopping';
+
   return (
     <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium ring-1 ${cfg.bg} ${cfg.text} ${cfg.ring}`}>
-      <span className={`w-1.5 h-1.5 rounded-full ${cfg.dot}`} />
+      {spinning ? (
+        <Loader2 size={11} className="animate-spin" />
+      ) : (
+        <span className={`w-1.5 h-1.5 rounded-full ${status === 'error' ? 'bg-rose-400' : status === 'completed' ? 'bg-emerald-400' : status === 'running' ? 'bg-blue-400' : 'bg-gray-400'}`} />
+      )}
       {status}
     </span>
   );
 }
 
 function GradientProgressBar({ progress, dbCount, totalCount }) {
+  const animatedDb = useCountUp(dbCount);
   const clampedPct = Math.max(0, Math.min(100, progress));
   const displayPct = progress < 1 ? progress.toFixed(3) : progress.toFixed(1);
 
-  const numerator = dbCount != null ? Number(dbCount).toLocaleString() : '—';
+  const numerator = animatedDb != null ? Number(animatedDb).toLocaleString() : '—';
   const denominator = totalCount != null ? Number(totalCount).toLocaleString() : '—';
 
   return (
@@ -101,18 +123,25 @@ function GradientProgressBar({ progress, dbCount, totalCount }) {
   );
 }
 
-function StatCard({ icon: Icon, label, value, color }) {
+function QueueStage({ icon: Icon, label, value, color, infoTitle }) {
+  const animated = useCountUp(value ?? 0);
   return (
-    <div className="relative overflow-hidden rounded-xl border border-white/10 bg-white/5 backdrop-blur-sm p-5 shadow-sm">
-      <div className="flex items-start justify-between">
-        <div>
-          <p className="text-xs font-medium text-gray-400 uppercase tracking-wider">{label}</p>
-          <p className={`mt-1.5 text-3xl font-bold ${color}`}>{value}</p>
-        </div>
-        <div className={`p-2.5 rounded-lg bg-white/5`}>
-          <Icon size={18} className={color} />
-        </div>
+    <div className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2.5">
+      <div className="flex items-center gap-2 text-xs text-gray-400 uppercase tracking-wider">
+        <Icon size={13} className={color} />
+        <span>{label}</span>
+        {infoTitle && (
+          <Info
+            size={12}
+            className="text-gray-500"
+            title={infoTitle}
+            aria-label={infoTitle}
+          />
+        )}
       </div>
+      <p className={`mt-1 text-2xl font-bold tabular-nums ${color}`}>
+        {animated?.toLocaleString() ?? '—'}
+      </p>
     </div>
   );
 }
@@ -243,16 +272,10 @@ function CreateTaskModal({ open, onClose, onCreated }) {
             ) : (
               <>
                 <InputField
-                  label="detail_quota"
+                  label="scan_window"
                   type="number"
-                  value={form.config.detail_quota}
-                  onChange={(e) => setForm((p) => ({ ...p, config: { ...p.config, detail_quota: e.target.value } }))}
-                />
-                <InputField
-                  label="gid_window"
-                  type="number"
-                  value={form.config.gid_window}
-                  onChange={(e) => setForm((p) => ({ ...p, config: { ...p.config, gid_window: e.target.value } }))}
+                  value={form.config.scan_window}
+                  onChange={(e) => setForm((p) => ({ ...p, config: { ...p.config, scan_window: e.target.value } }))}
                 />
                 <InputField
                   label="rating_diff_threshold"
@@ -294,25 +317,90 @@ function CreateTaskModal({ open, onClose, onCreated }) {
   );
 }
 
+function DeleteTaskModal({ open, task, busy, onClose, onConfirm }) {
+  const [value, setValue] = useState('');
+
+  useEffect(() => {
+    setValue('');
+  }, [open, task?.id]);
+
+  if (!open || !task) return null;
+
+  const canDelete = value.trim() === task.name;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => !busy && onClose()} />
+      <div className="relative w-full max-w-md mx-4 rounded-2xl border border-rose-500/30 bg-[#1a1a1a] shadow-2xl">
+        <div className="flex items-center gap-2 px-6 py-4 border-b border-white/10">
+          <AlertTriangle size={16} className="text-rose-400" />
+          <h2 className="text-base font-semibold text-white">确认删除任务</h2>
+        </div>
+
+        <div className="px-6 py-5 space-y-3">
+          <p className="text-sm text-gray-300">
+            请输入任务名以确认删除：
+            <span className="ml-1 font-mono text-white">{task.name}</span>
+          </p>
+          <input
+            type="text"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            placeholder={task.name}
+            className="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-white text-sm
+                       placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-rose-500/50
+                       focus:border-rose-500/50 transition-all"
+          />
+        </div>
+
+        <div className="flex justify-end gap-3 px-6 py-4 border-t border-white/10">
+          <button
+            onClick={onClose}
+            disabled={busy}
+            className="px-4 py-2 text-sm rounded-lg text-gray-400 hover:text-white hover:bg-white/10 transition-all disabled:opacity-50"
+          >
+            取消
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={!canDelete || busy}
+            className="px-4 py-2 text-sm rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-medium transition-all disabled:opacity-50 flex items-center gap-2"
+          >
+            {busy && <Loader2 size={14} className="animate-spin" />}
+            删除
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function AdminPage() {
   const queryClient = useQueryClient();
   const [openCreate, setOpenCreate] = useState(false);
-  const [busy, setBusy] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [pendingByTask, setPendingByTask] = useState({});
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+
+  const modalOpen = openCreate || Boolean(deleteTarget);
+  const shouldPoll = autoRefresh && !modalOpen;
 
   const tasksQuery = useQuery({
     queryKey: ['admin', 'tasks'],
     queryFn: getTasks,
-    refetchInterval: 5000,
+    refetchInterval: shouldPoll ? 5000 : false,
   });
 
   const thumbQuery = useQuery({
     queryKey: ['admin', 'thumbStats'],
     queryFn: getThumbStats,
-    refetchInterval: 5000,
+    refetchInterval: shouldPoll ? 5000 : false,
   });
+
+  const isFetching = tasksQuery.isFetching || thumbQuery.isFetching;
 
   const tasks = tasksQuery.data || [];
   const stats = thumbQuery.data || { pending: 0, processing: 0, done: 0, waiting: 0 };
@@ -322,17 +410,54 @@ export default function AdminPage() {
     queryClient.invalidateQueries({ queryKey: ['admin', 'thumbStats'] });
   };
 
-  const runAction = async (fn) => {
+  const upsertTaskCache = (task) => {
+    if (!task?.id) return;
+    queryClient.setQueryData(['admin', 'tasks'], (prev = []) => {
+      const exists = prev.some((item) => item.id === task.id);
+      if (!exists) return prev;
+      return prev.map((item) => (item.id === task.id ? task : item));
+    });
+  };
+
+  const removeTaskCache = (taskId) => {
+    queryClient.setQueryData(['admin', 'tasks'], (prev = []) => prev.filter((item) => item.id !== taskId));
+  };
+
+  const setTaskPending = (taskId, action) => {
+    setPendingByTask((prev) => ({ ...prev, [taskId]: action }));
+  };
+
+  const clearTaskPending = (taskId) => {
+    setPendingByTask((prev) => {
+      const next = { ...prev };
+      delete next[taskId];
+      return next;
+    });
+  };
+
+  const runTaskAction = async (taskId, action, fn, onSuccess) => {
     setErrorMsg('');
-    setBusy(true);
+    setTaskPending(taskId, action);
     try {
-      await fn();
+      const result = await fn();
+      upsertTaskCache(result);
+      if (action === 'delete') {
+        removeTaskCache(taskId);
+      }
       refresh();
+      if (onSuccess) onSuccess(result);
     } catch (err) {
       setErrorMsg(err.message || '操作失败');
     } finally {
-      setBusy(false);
+      clearTaskPending(taskId);
     }
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteTarget) return;
+    await runTaskAction(deleteTarget.id, 'delete', () => deleteTask(deleteTarget.id, true), () => {
+      setDeleteTarget(null);
+    });
   };
 
   return (
@@ -345,11 +470,31 @@ export default function AdminPage() {
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={refresh}
-            className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-white/10 transition-all"
-            title="刷新"
+            onClick={() => setAutoRefresh((v) => !v)}
+            className={`relative p-2 rounded-lg transition-all ${autoRefresh
+              ? 'text-emerald-400 hover:bg-emerald-500/10'
+              : 'text-gray-400 hover:text-white hover:bg-white/10'
+              }`}
+            title={autoRefresh ? '自动刷新中（点击暂停）' : '自动刷新已暂停（点击开启）'}
           >
-            <RefreshCw size={16} />
+            {autoRefresh && (
+              <svg
+                className="absolute inset-0 w-full h-full pointer-events-none"
+                viewBox="0 0 32 32"
+                fill="none"
+              >
+                <circle
+                  cx="16" cy="16" r="13"
+                  strokeWidth="1.5"
+                  transform="rotate(-90 16 16)"
+                  style={{
+                    strokeDasharray: '81.68',
+                    animation: 'refresh-ring 5s linear infinite, refresh-ring-pulse 5s linear infinite',
+                  }}
+                />
+              </svg>
+            )}
+            <RefreshCw size={16} className={isFetching ? 'animate-spin' : ''} />
           </button>
           <button
             onClick={() => setOpenCreate(true)}
@@ -375,14 +520,22 @@ export default function AdminPage() {
         </div>
       )}
 
-      {/* Bento Stats Grid */}
+      {/* Queue Flow */}
       <div>
         <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-3">Thumb Queue</p>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <StatCard icon={Clock} label="Pending" value={stats.pending} color="text-yellow-400" />
-          <StatCard icon={Loader2} label="Processing" value={stats.processing} color="text-blue-400" />
-          <StatCard icon={CheckCircle2} label="Done" value={stats.done} color="text-emerald-400" />
-          <StatCard icon={XCircle} label="Waiting" value={stats.waiting} color="text-orange-400" />
+        <div className="rounded-xl border border-white/10 bg-white/5 backdrop-blur-sm p-4 shadow-sm">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 w-full">
+            <QueueStage
+              icon={Loader2}
+              label="Waiting"
+              value={stats.waiting}
+              color="text-orange-400"
+              infoTitle="失败重试等待中，冷却后进入 Pending"
+            />
+            <QueueStage icon={RefreshCw} label="Pending" value={stats.pending} color="text-yellow-400" />
+            <QueueStage icon={Loader2} label="Processing" value={stats.processing} color="text-blue-400" />
+            <QueueStage icon={CheckCircle2} label="Done" value={stats.done} color="text-emerald-400" />
+          </div>
         </div>
       </div>
 
@@ -413,11 +566,21 @@ export default function AdminPage() {
               <tbody className="divide-y divide-white/5">
                 {tasks.map((task) => {
                   const progress = Number(task.progress_pct || 0);
-                  const dbCount = task.state?.db_count ?? null;
-                  const totalCount = task.state?.total_count ?? null;
-                  const isRunning = task.status === 'running';
-                  const isStopped = task.status === 'stopped';
-                  const isCompleted = task.status === 'completed';
+                  const isIncremental = task.type === 'incremental';
+                  const dbCount = isIncremental
+                    ? (task.state?.scanned_count ?? null)
+                    : (task.state?.db_count ?? null);
+                  const totalCount = isIncremental
+                    ? (task.config?.scan_window ?? null)
+                    : (task.state?.total_count ?? null);
+                  const transition = isTransitioning(task);
+                  const displayStatus = getDisplayStatus(task);
+                  const rowAction = pendingByTask[task.id];
+                  const rowBusy = Boolean(rowAction);
+
+                  const canStart = !rowBusy && !transition && task.status !== 'running' && task.status !== 'completed';
+                  const canStop = !rowBusy && !transition && task.status === 'running';
+                  const canDelete = !rowBusy && !transition && task.status !== 'running' && task.desired_status !== 'running';
 
                   return (
                     <tr
@@ -440,7 +603,7 @@ export default function AdminPage() {
                       </td>
                       <td className="px-4 py-3.5 text-gray-300">{task.category}</td>
                       <td className="px-4 py-3.5">
-                        <StatusBadge status={task.status} />
+                        <StatusBadge status={displayStatus} />
                       </td>
                       <td className="px-4 py-3.5">
                         <GradientProgressBar
@@ -454,32 +617,32 @@ export default function AdminPage() {
                           {/* Start */}
                           <button
                             title="Start"
-                            disabled={busy || isRunning || isCompleted}
-                            onClick={() => runAction(() => startTask(task.id))}
+                            disabled={!canStart}
+                            onClick={() => runTaskAction(task.id, 'start', () => startTask(task.id))}
                             className="p-1.5 rounded-lg text-emerald-400 hover:bg-emerald-500/20 transition-all
                                        disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
                           >
-                            <Play size={15} />
+                            {rowAction === 'start' ? <Loader2 size={15} className="animate-spin" /> : <Play size={15} />}
                           </button>
                           {/* Stop */}
                           <button
                             title="Stop"
-                            disabled={busy || isStopped || isCompleted}
-                            onClick={() => runAction(() => stopTask(task.id))}
+                            disabled={!canStop}
+                            onClick={() => runTaskAction(task.id, 'stop', () => stopTask(task.id))}
                             className="p-1.5 rounded-lg text-yellow-400 hover:bg-yellow-500/20 transition-all
                                        disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
                           >
-                            <Square size={15} />
+                            {rowAction === 'stop' ? <Loader2 size={15} className="animate-spin" /> : <Square size={15} />}
                           </button>
                           {/* Delete */}
                           <button
                             title="Delete"
-                            disabled={busy}
-                            onClick={() => runAction(() => deleteTask(task.id))}
+                            disabled={!canDelete}
+                            onClick={() => setDeleteTarget(task)}
                             className="p-1.5 rounded-lg text-rose-400 hover:bg-rose-500/20 transition-all
                                        disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
                           >
-                            <Trash2 size={15} />
+                            {rowAction === 'delete' ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
                           </button>
                         </div>
                       </td>
@@ -497,6 +660,15 @@ export default function AdminPage() {
         open={openCreate}
         onClose={() => setOpenCreate(false)}
         onCreated={refresh}
+      />
+
+      {/* Delete Confirm Modal */}
+      <DeleteTaskModal
+        open={Boolean(deleteTarget)}
+        task={deleteTarget}
+        busy={deleteTarget ? pendingByTask[deleteTarget.id] === 'delete' : false}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={handleDeleteConfirm}
       />
     </div>
   );

@@ -7,7 +7,7 @@ NEXT_CURSOR_RE = re.compile(r'[?&]next=(\d+)')
 RATING_RE = re.compile(r"([0-5](?:\.\d+)?)")
 TOTAL_COUNT_RE = re.compile(r"Found\s+(?:about\s+)?([\d,]+)\s+results")
 TAG_CLASS_RE = re.compile(r"^gt")
-OPACITY_RE = re.compile(r"opacity\s*:\s*([0-9.]+)")
+BG_POS_RE = re.compile(r"background-position\s*:\s*(-?\d+)px\s+(-?\d+)px")
 SPACE_RE = re.compile(r"\s+")
 
 
@@ -18,7 +18,7 @@ class GalleryListItem:
     title: str
     rating_sig: str
     rating_est: float | None
-    visible_tag_count: int
+    visible_tags: tuple[str, ...]
 
 
 def _normalize_text(value: str) -> str:
@@ -26,41 +26,39 @@ def _normalize_text(value: str) -> str:
 
 
 def _extract_rating_signal(element: Tag) -> tuple[str, float | None]:
-    ir_node = element.find(class_=re.compile(r"\bir"))
-    if ir_node:
-        title = _normalize_text(ir_node.get("title", ""))
-        if title:
-            m = RATING_RE.search(title)
-            if m:
-                value = float(m.group(1))
-                return f"avg:{value:.2f}", value
-            return f"title:{title}", None
 
-        style = _normalize_text(ir_node.get("style", ""))
-        if style:
-            m = OPACITY_RE.search(style)
-            if m:
-                try:
-                    opacity = float(m.group(1))
-                    # EX list stars often encode fill ratio in opacity; map 0..1 to 0..5.
-                    estimate = max(0.0, min(5.0, opacity * 5.0))
-                    return f"style:{style.replace(' ', '')}", estimate
-                except ValueError:
-                    pass
-            return f"style:{style.replace(' ', '')}", None
-
-        classes = [c for c in (ir_node.get("class") or []) if c]
-        if classes:
-            return f"class:{','.join(sorted(classes))}", None
+    # EH 列表页通过两个 .ir div 的 CSS sprite 编码评分：
+    #   Y=-1px  → 整星行，rating = 5.0 - abs(x) / 16.0
+    #   Y=-21px → 半星行，rating = 4.5 - abs(x) / 16.0
+    # 两行共享同一套 X 步进：每 16px 代表少一颗整星。
+    for ir in element.find_all(class_=re.compile(r"\bir")):
+        style = _normalize_text(ir.get("style", ""))
+        m = BG_POS_RE.search(style)
+        if not m:
+            title = _normalize_text(ir.get("title", ""))
+            if not title:
+                continue
+            m_title = RATING_RE.search(title)
+            if m_title:
+                value = float(m_title.group(1))
+                return f"title:{value:.2f}", value
+            continue
+        x, y = int(m.group(1)), int(m.group(2))
+        if y == -1:
+            value = max(0.0, min(5.0, 5.0 - abs(x) / 16.0))
+            return f"sprite:x={x},y={y}", value
+        if y == -21:
+            value = max(0.0, min(5.0, 4.5 - abs(x) / 16.0))
+            return f"sprite:x={x},y={y}", value
 
     for klass in ("gl4e", "gl4t", "gl5t", "gl5m", "gl5c"):
         node = element.find(class_=klass)
         if not node:
             continue
         text = _normalize_text(node.get_text(" ", strip=True))
-        m = RATING_RE.search(text)
-        if m:
-            value = float(m.group(1))
+        m_text = RATING_RE.search(text)
+        if m_text:
+            value = float(m_text.group(1))
             return f"text:{value:.2f}", value
 
     return "", None
@@ -157,7 +155,7 @@ def parse_gallery_list(html: str) -> tuple[list[GalleryListItem], int | None, in
                 title=title,
                 rating_sig=rating_sig,
                 rating_est=rating_est,
-                visible_tag_count=len(visible_tags),
+                visible_tags=tuple(sorted(visible_tags)),
             )
         )
 
