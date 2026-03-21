@@ -1041,6 +1041,9 @@ async def run_thumb_worker():
                     if resp.status_code == 200:
                         (thumb_dir / str(gid)).write_bytes(resp.content)
                         db.mark_thumb_queue_done(item_id)
+                    elif resp.status_code == 404:
+                        db.mark_thumb_queue_permanent_failed(item_id)
+                        logger.warning(f"[THUMB] gid={gid} HTTP 404, marked as failed (no retry)")
                     else:
                         retry_info = db.mark_thumb_queue_failed(item_id)
                         logger.warning(

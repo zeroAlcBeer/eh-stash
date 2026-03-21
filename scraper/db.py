@@ -221,26 +221,39 @@ def mark_thumb_queue_done(item_id: int) -> None:
         )
 
 
-def mark_thumb_queue_failed(item_id: int) -> tuple[int, str] | None:
+def mark_thumb_queue_failed(item_id: int, max_retries: int = 10) -> tuple[int, str] | None:
     with get_cursor() as (cur, _):
         cur.execute(
             """
             UPDATE thumb_queue
             SET retry_count = retry_count + 1,
-                status = 'pending',
-                processed_at = NULL,
-                next_retry_at = NOW() + (
-                    LEAST(POWER(2, retry_count + 1), 8) || ' minutes'
-                )::interval
+                status = CASE WHEN retry_count + 1 >= %s THEN 'failed' ELSE 'pending' END,
+                processed_at = CASE WHEN retry_count + 1 >= %s THEN NOW() ELSE NULL END,
+                next_retry_at = CASE WHEN retry_count + 1 >= %s THEN NULL
+                    ELSE NOW() + (LEAST(POWER(2, retry_count + 1), 8) || ' minutes')::interval
+                END
             WHERE id = %s
             RETURNING retry_count, status
             """,
-            (item_id,),
+            (max_retries, max_retries, max_retries, item_id),
         )
         row = cur.fetchone()
         if not row:
             return None
         return row[0], row[1]
+
+
+def mark_thumb_queue_permanent_failed(item_id: int) -> None:
+    """将缩略图任务标记为永久失败（如 404），不再重试"""
+    with get_cursor() as (cur, _):
+        cur.execute(
+            """
+            UPDATE thumb_queue
+            SET status = 'failed', processed_at = NOW()
+            WHERE id = %s
+            """,
+            (item_id,),
+        )
 
 
 def reset_stale_thumb_processing() -> int:
