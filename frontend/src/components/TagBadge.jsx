@@ -29,7 +29,8 @@ const TagBadge = ({ namespace, value, translation, showNs = true, onClick }) => 
             type="button"
             onClick={onClick}
             title={titleAttr}
-            className={`inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium ring-1 transition-opacity hover:opacity-80 ${colors}`}
+            aria-label={`${namespace}:${value}`}
+            className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ring-1 transition-opacity hover:opacity-80 ${colors}`}
         >
             {showNs && <span className="opacity-50 mr-0.5">{namespace}:</span>}
             {label}

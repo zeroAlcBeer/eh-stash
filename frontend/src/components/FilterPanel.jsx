@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useRef, useMemo, useId } from 'react';
 import { Search, X, ChevronDown, ChevronUp, SlidersHorizontal } from 'lucide-react';
 
 const CATEGORIES = [
@@ -14,10 +14,11 @@ const MIN_FAV_OPTIONS = [
   { value: 2000, label: '≥ 2000' },
 ];
 
-function SelectField({ value, onChange, children, className = '' }) {
+function SelectField({ value, onChange, children, className = '', id }) {
   return (
     <div className={`relative ${className}`}>
       <select
+        id={id}
         value={value}
         onChange={onChange}
         className="w-full appearance-none px-3 py-1.5 pr-7 rounded-lg bg-white/5 border border-white/10 text-white text-sm
@@ -38,6 +39,7 @@ const FilterPanel = ({ filters, onChange, tagSuggestions = [] }) => {
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [activeSuggestion, setActiveSuggestion] = useState(-1);
   const tagInputRef = useRef(null);
+  const listboxId = useId();
 
   const tags = filters.tags || [];
 
@@ -89,6 +91,9 @@ const FilterPanel = ({ filters, onChange, tagSuggestions = [] }) => {
     filters.min_fav > 0 ? filters.min_fav : null,
   ].filter(Boolean).length;
 
+  const hasSuggestions = showSuggestions && filteredSuggestions.length > 0;
+  const activeOptionId = activeSuggestion >= 0 ? `${listboxId}-option-${activeSuggestion}` : undefined;
+
   return (
     <div className="sticky top-12 z-30 mb-3">
       <div className="rounded-xl border border-white/10 bg-zinc-900/90 backdrop-blur-md">
@@ -97,6 +102,7 @@ const FilterPanel = ({ filters, onChange, tagSuggestions = [] }) => {
         <button
           type="button"
           onClick={() => setCollapsed((v) => !v)}
+          aria-expanded={!collapsed}
           className="w-full flex items-center justify-between px-4 py-2.5 text-sm hover:bg-white/5 transition-colors lg:hidden"
         >
           <span className="flex items-center gap-2 font-medium text-gray-300">
@@ -116,8 +122,8 @@ const FilterPanel = ({ filters, onChange, tagSuggestions = [] }) => {
 
           {/* Category */}
           <div className="flex flex-col gap-1">
-            <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider">Category</label>
-            <SelectField value={filters.category || ''} onChange={set('category')} className="w-32">
+            <label htmlFor="filter-category" className="text-xs font-medium text-gray-500 uppercase tracking-wider">Category</label>
+            <SelectField id="filter-category" value={filters.category || ''} onChange={set('category')} className="w-32">
               <option value="" className="bg-zinc-900">All</option>
               {CATEGORIES.map((c) => (
                 <option key={c} value={c} className="bg-zinc-900">{c}</option>
@@ -127,8 +133,9 @@ const FilterPanel = ({ filters, onChange, tagSuggestions = [] }) => {
 
           {/* Min Fav */}
           <div className="flex flex-col gap-1">
-            <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider">Min Fav</label>
+            <label htmlFor="filter-min-fav" className="text-xs font-medium text-gray-500 uppercase tracking-wider">Min Fav</label>
             <SelectField
+              id="filter-min-fav"
               value={filters.min_fav || 0}
               onChange={(e) => onChange({ ...filters, min_fav: Number(e.target.value) })}
               className="w-28"
@@ -141,7 +148,7 @@ const FilterPanel = ({ filters, onChange, tagSuggestions = [] }) => {
 
           {/* Tag search */}
           <div className="flex flex-col gap-1 flex-1 min-w-[160px]">
-            <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider">Tag</label>
+            <label htmlFor="filter-tag-input" className="text-xs font-medium text-gray-500 uppercase tracking-wider">Tag</label>
             {/* Selected tag pills */}
             {tags.length > 0 && (
               <div className="flex flex-wrap gap-1 mb-1">
@@ -154,9 +161,10 @@ const FilterPanel = ({ filters, onChange, tagSuggestions = [] }) => {
                     <button
                       type="button"
                       onClick={() => removeTag(t)}
-                      className="hover:text-white transition-colors"
+                      className="p-0.5 hover:text-white transition-colors rounded"
+                      aria-label={`移除标签 ${t}`}
                     >
-                      <X size={11} />
+                      <X size={12} />
                     </button>
                   </span>
                 ))}
@@ -164,10 +172,16 @@ const FilterPanel = ({ filters, onChange, tagSuggestions = [] }) => {
             )}
             <div className="relative">
               <div className="relative flex items-center">
-                <Search size={13} className="absolute left-2.5 text-gray-500 pointer-events-none" />
+                <Search size={13} className="absolute left-2.5 text-gray-500 pointer-events-none" aria-hidden="true" />
                 <input
                   ref={tagInputRef}
+                  id="filter-tag-input"
                   type="text"
+                  role="combobox"
+                  aria-expanded={hasSuggestions}
+                  aria-controls={listboxId}
+                  aria-activedescendant={activeOptionId}
+                  aria-autocomplete="list"
                   value={tagInput}
                   onChange={(e) => {
                     setTagInput(e.target.value);
@@ -227,33 +241,45 @@ const FilterPanel = ({ filters, onChange, tagSuggestions = [] }) => {
                   <button
                     type="button"
                     onClick={clearTag}
-                    className="absolute right-2 text-gray-500 hover:text-white transition-colors"
+                    className="absolute right-1.5 p-1 text-gray-500 hover:text-white transition-colors rounded"
+                    aria-label="清除搜索"
                   >
                     <X size={13} />
                   </button>
                 )}
               </div>
-              {showSuggestions && filteredSuggestions.length > 0 && (
-                <div className="absolute top-full mt-1 z-40 w-full rounded-lg border border-white/10 bg-zinc-900 shadow-xl overflow-hidden">
+              {hasSuggestions && (
+                <ul
+                  id={listboxId}
+                  role="listbox"
+                  className="absolute top-full mt-1 z-40 w-full rounded-lg border border-white/10 bg-zinc-900 shadow-xl overflow-hidden"
+                >
                   {filteredSuggestions.map((suggestion, idx) => (
-                    <button
+                    <li
                       key={suggestion}
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => selectSuggestion(suggestion)}
-                      className={`w-full px-3 py-2 text-left text-xs transition-colors ${idx === activeSuggestion
-                          ? 'bg-blue-500/20 text-blue-200'
-                          : 'text-gray-300 hover:bg-white/10 hover:text-white'
-                        }`}
+                      id={`${listboxId}-option-${idx}`}
+                      role="option"
+                      aria-selected={idx === activeSuggestion}
                     >
-                      {suggestion}
-                    </button>
+                      <button
+                        type="button"
+                        tabIndex={-1}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => selectSuggestion(suggestion)}
+                        className={`w-full px-3 py-2 text-left text-xs transition-colors ${idx === activeSuggestion
+                            ? 'bg-blue-500/20 text-blue-200'
+                            : 'text-gray-300 hover:bg-white/10 hover:text-white'
+                          }`}
+                      >
+                        {suggestion}
+                      </button>
+                    </li>
                   ))}
-                </div>
+                </ul>
               )}
             </div>
             {showSuggestions && filteredSuggestions.length === 0 && tagInput.trim() && (
-              <div className="mt-1 text-[11px] text-gray-500">无匹配 tag</div>
+              <div className="mt-1 text-xs text-gray-500">无匹配 tag</div>
             )}
           </div>
 

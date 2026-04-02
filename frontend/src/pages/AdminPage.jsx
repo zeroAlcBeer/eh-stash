@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Loader2,
@@ -24,6 +24,7 @@ import {
   stopTask,
 } from '../api/admin';
 import { useCountUp } from '../hooks/useCountUp';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -119,7 +120,7 @@ function StatusBadge({ status }) {
       {spinning ? (
         <Loader2 size={11} className="animate-spin" />
       ) : (
-        <span className={`w-1.5 h-1.5 rounded-full ${status === 'error' ? 'bg-rose-400' : status === 'completed' ? 'bg-emerald-400' : status === 'running' ? 'bg-blue-400' : 'bg-gray-400'}`} />
+        <span className={`w-1.5 h-1.5 rounded-full ${status === 'error' ? 'bg-rose-400' : status === 'completed' ? 'bg-emerald-400' : status === 'running' ? 'bg-blue-400' : 'bg-gray-400'}`} aria-hidden="true" />
       )}
       {status}
     </span>
@@ -142,7 +143,7 @@ function GradientProgressBar({ progress, dbCount, totalCount }) {
         </span>
         <span className="text-xs font-semibold text-white ml-2">{displayPct}%</span>
       </div>
-      <div className="h-1.5 w-full rounded-full bg-white/10 overflow-hidden">
+      <div className="h-1.5 w-full rounded-full bg-white/10 overflow-hidden" role="progressbar" aria-valuenow={clampedPct} aria-valuemin={0} aria-valuemax={100}>
         <div
           className="h-full rounded-full transition-all duration-700 ease-out"
           style={{
@@ -178,11 +179,12 @@ function QueueStage({ icon: Icon, label, value, color, infoTitle }) {
   );
 }
 
-function InputField({ label, type = 'text', value, onChange, placeholder, step }) {
+function InputField({ label, type = 'text', value, onChange, placeholder, step, id }) {
   return (
     <div>
-      <label className="block text-xs font-medium text-gray-400 mb-1.5">{label}</label>
+      <label htmlFor={id} className="block text-xs font-medium text-gray-400 mb-1.5">{label}</label>
       <input
+        id={id}
         type={type}
         value={value}
         onChange={onChange}
@@ -196,12 +198,13 @@ function InputField({ label, type = 'text', value, onChange, placeholder, step }
   );
 }
 
-function SelectField({ label, value, onChange, options }) {
+function SelectField({ label, value, onChange, options, id }) {
   return (
     <div>
-      <label className="block text-xs font-medium text-gray-400 mb-1.5">{label}</label>
+      <label htmlFor={id} className="block text-xs font-medium text-gray-400 mb-1.5">{label}</label>
       <div className="relative">
         <select
+          id={id}
           value={value}
           onChange={onChange}
           className="w-full appearance-none px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-white text-sm
@@ -209,7 +212,7 @@ function SelectField({ label, value, onChange, options }) {
                      transition-all cursor-pointer"
         >
           {options.map((opt) => (
-            <option key={opt.value ?? opt} value={opt.value ?? opt} className="bg-[#1e1e1e]">
+            <option key={opt.value ?? opt} value={opt.value ?? opt} className="bg-zinc-900">
               {opt.label ?? opt}
             </option>
           ))}
@@ -230,6 +233,11 @@ function CreateTaskModal({ open, onClose, onCreated, tasks }) {
   });
   const hasIncrementalTask = (tasks || []).some((task) => task.type === 'incremental');
   const hasFavoritesTask = (tasks || []).some((task) => task.type === 'favorites');
+
+  const handleClose = useCallback(() => {
+    if (!busy) onClose();
+  }, [busy, onClose]);
+  const dialogRef = useFocusTrap(open, handleClose);
 
   const handleTypeChange = (nextType) => {
     setForm((prev) => ({
@@ -290,15 +298,22 @@ function CreateTaskModal({ open, onClose, onCreated, tasks }) {
       {/* Backdrop */}
       <div
         className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-        onClick={onClose}
+        onClick={handleClose}
       />
       {/* Modal */}
-      <div className="relative w-full max-w-md mx-4 rounded-2xl border border-white/10 bg-[#1a1a1a] shadow-2xl">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="新建同步任务"
+        className="relative w-full max-w-md mx-4 rounded-2xl border border-white/10 bg-zinc-900 shadow-2xl"
+      >
         <div className="flex items-center justify-between px-6 py-4 border-b border-white/10">
           <h2 className="text-base font-semibold text-white">新建同步任务</h2>
           <button
-            onClick={onClose}
-            className="text-gray-400 hover:text-white transition-colors p-1 rounded-lg hover:bg-white/10"
+            onClick={handleClose}
+            className="p-2 -mr-1 text-gray-400 hover:text-white transition-colors rounded-lg hover:bg-white/10"
+            aria-label="关闭"
           >
             <XCircle size={18} />
           </button>
@@ -306,12 +321,14 @@ function CreateTaskModal({ open, onClose, onCreated, tasks }) {
 
         <div className="px-6 py-5 space-y-4">
           <InputField
+            id="task-name"
             label="任务名称"
             value={form.name}
             onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
             placeholder="e.g. cosplay-full-01"
           />
           <SelectField
+            id="task-type"
             label="类型"
             value={form.type}
             onChange={(e) => handleTypeChange(e.target.value)}
@@ -323,6 +340,7 @@ function CreateTaskModal({ open, onClose, onCreated, tasks }) {
           />
           {form.type === 'full' ? (
             <SelectField
+              id="task-category"
               label="分类 (Category)"
               value={form.category}
               onChange={(e) => setForm((p) => ({ ...p, category: e.target.value }))}
@@ -356,6 +374,7 @@ function CreateTaskModal({ open, onClose, onCreated, tasks }) {
             <p className="text-xs font-medium text-gray-500 uppercase tracking-wider">Config</p>
             {form.type === 'full' ? (
               <InputField
+                id="config-start-gid"
                 label="start_gid (可选)"
                 type="number"
                 value={form.config.start_gid}
@@ -364,6 +383,7 @@ function CreateTaskModal({ open, onClose, onCreated, tasks }) {
               />
             ) : form.type === 'favorites' ? (
               <InputField
+                id="config-interval"
                 label="run_interval_hours (同步间隔/小时)"
                 type="number"
                 step="1"
@@ -373,12 +393,14 @@ function CreateTaskModal({ open, onClose, onCreated, tasks }) {
             ) : (
               <>
                 <InputField
+                  id="config-scan-window"
                   label="scan_window"
                   type="number"
                   value={form.config.scan_window}
                   onChange={(e) => setForm((p) => ({ ...p, config: { ...p.config, scan_window: e.target.value } }))}
                 />
                 <InputField
+                  id="config-rating-diff"
                   label="rating_diff_threshold"
                   type="number"
                   step="0.1"
@@ -389,18 +411,18 @@ function CreateTaskModal({ open, onClose, onCreated, tasks }) {
             )}
           </div>
           {form.type === 'incremental' && hasIncrementalTask && (
-            <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 px-3 py-2 text-sm text-amber-300">
+            <div role="alert" className="rounded-lg bg-amber-500/10 border border-amber-500/30 px-3 py-2 text-sm text-amber-300">
               已存在 incremental 任务。系统仅允许一个 incremental 任务。
             </div>
           )}
           {form.type === 'favorites' && hasFavoritesTask && (
-            <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 px-3 py-2 text-sm text-amber-300">
+            <div role="alert" className="rounded-lg bg-amber-500/10 border border-amber-500/30 px-3 py-2 text-sm text-amber-300">
               已存在 favorites 任务。系统仅允许一个 favorites 任务。
             </div>
           )}
 
           {errorMsg && (
-            <div className="rounded-lg bg-rose-500/10 border border-rose-500/30 px-3 py-2 text-sm text-rose-400">
+            <div role="alert" className="rounded-lg bg-rose-500/10 border border-rose-500/30 px-3 py-2 text-sm text-rose-400">
               {errorMsg}
             </div>
           )}
@@ -408,7 +430,7 @@ function CreateTaskModal({ open, onClose, onCreated, tasks }) {
 
         <div className="flex justify-end gap-3 px-6 py-4 border-t border-white/10">
           <button
-            onClick={onClose}
+            onClick={handleClose}
             disabled={busy}
             className="px-4 py-2 text-sm rounded-lg text-gray-400 hover:text-white hover:bg-white/10 transition-all disabled:opacity-50"
           >
@@ -431,6 +453,11 @@ function CreateTaskModal({ open, onClose, onCreated, tasks }) {
 function DeleteTaskModal({ open, task, busy, onClose, onConfirm }) {
   const [value, setValue] = useState('');
 
+  const handleClose = useCallback(() => {
+    if (!busy) onClose();
+  }, [busy, onClose]);
+  const dialogRef = useFocusTrap(open && Boolean(task), handleClose);
+
   useEffect(() => {
     setValue('');
   }, [open, task?.id]);
@@ -441,8 +468,14 @@ function DeleteTaskModal({ open, task, busy, onClose, onConfirm }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => !busy && onClose()} />
-      <div className="relative w-full max-w-md mx-4 rounded-2xl border border-rose-500/30 bg-[#1a1a1a] shadow-2xl">
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={handleClose} />
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="确认删除任务"
+        className="relative w-full max-w-md mx-4 rounded-2xl border border-rose-500/30 bg-zinc-900 shadow-2xl"
+      >
         <div className="flex items-center gap-2 px-6 py-4 border-b border-white/10">
           <AlertTriangle size={16} className="text-rose-400" />
           <h2 className="text-base font-semibold text-white">确认删除任务</h2>
@@ -458,6 +491,7 @@ function DeleteTaskModal({ open, task, busy, onClose, onConfirm }) {
             value={value}
             onChange={(e) => setValue(e.target.value)}
             placeholder={task.name}
+            aria-label="输入任务名以确认"
             className="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-white text-sm
                        placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-rose-500/50
                        focus:border-rose-500/50 transition-all"
@@ -466,7 +500,7 @@ function DeleteTaskModal({ open, task, busy, onClose, onConfirm }) {
 
         <div className="flex justify-end gap-3 px-6 py-4 border-t border-white/10">
           <button
-            onClick={onClose}
+            onClick={handleClose}
             disabled={busy}
             className="px-4 py-2 text-sm rounded-lg text-gray-400 hover:text-white hover:bg-white/10 transition-all disabled:opacity-50"
           >
@@ -572,7 +606,7 @@ function ScoreDistributionPanel() {
       </div>
 
       {/* Histogram */}
-      <div className="relative">
+      <div className="relative" aria-label="评分分布直方图">
         <div className="flex items-end gap-px h-32">
           {dist.buckets.map((b, i) => {
             const pct = b.count > 0 ? Math.log(b.count + 1) / Math.log(maxCount + 1) : 0;
@@ -583,6 +617,7 @@ function ScoreDistributionPanel() {
                 key={i}
                 className="flex-1 relative group"
                 style={{ height: '100%', display: 'flex', alignItems: 'flex-end' }}
+                title={`${b.min.toFixed(1)} – ${b.max.toFixed(1)}: ${b.count}`}
               >
                 <div
                   className={`w-full rounded-t-sm transition-colors ${aboveThreshold ? 'bg-blue-500/70' : partial ? 'bg-blue-500/40' : 'bg-white/15'
@@ -591,7 +626,7 @@ function ScoreDistributionPanel() {
                 />
                 {/* Tooltip */}
                 <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 hidden group-hover:block z-10
-                                px-2 py-1 rounded bg-zinc-800 border border-white/10 text-[10px] text-gray-300 whitespace-nowrap shadow-lg">
+                                px-2 py-1 rounded bg-zinc-800 border border-white/10 text-xs text-gray-300 whitespace-nowrap shadow-lg">
                   {b.min.toFixed(1)} – {b.max.toFixed(1)}: {b.count}
                 </div>
               </div>
@@ -604,7 +639,7 @@ function ScoreDistributionPanel() {
             className="absolute top-0 bottom-0 w-px bg-red-500/80 pointer-events-none"
             style={{ left: `${((threshold - scoreMin) / (scoreMax - scoreMin)) * 100}%` }}
           >
-            <span className="absolute -top-5 left-1/2 -translate-x-1/2 text-[10px] text-red-400 font-mono whitespace-nowrap">
+            <span className="absolute -top-5 left-1/2 -translate-x-1/2 text-xs text-red-400 font-mono whitespace-nowrap">
               {threshold}
             </span>
           </div>
@@ -612,15 +647,16 @@ function ScoreDistributionPanel() {
       </div>
 
       {/* X-axis labels */}
-      <div className="flex justify-between text-[10px] text-gray-500 font-mono -mt-1">
+      <div className="flex justify-between text-xs text-gray-500 font-mono -mt-1">
         <span>{scoreMin.toFixed(0)}</span>
         <span>{scoreMax.toFixed(0)}</span>
       </div>
 
       {/* Slider */}
       <div className="flex items-center gap-3">
-        <span className="text-xs text-gray-400 shrink-0">阈值</span>
+        <label htmlFor="threshold-slider" className="text-xs text-gray-400 shrink-0">阈值</label>
         <input
+          id="threshold-slider"
           type="range"
           min={scoreMin}
           max={scoreMax}
@@ -635,6 +671,7 @@ function ScoreDistributionPanel() {
           step={0.5}
           value={threshold}
           onChange={(e) => setLocalThreshold(Number(e.target.value))}
+          aria-label="阈值数值"
           className="w-20 px-2 py-1 rounded-lg bg-white/5 border border-white/10 text-white text-xs text-center
                      focus:outline-none focus:ring-2 focus:ring-blue-500/40 transition-all"
         />
@@ -739,17 +776,19 @@ export default function AdminPage() {
         <div className="flex items-center gap-2">
           <button
             onClick={() => setAutoRefresh((v) => !v)}
-            className={`relative p-2 rounded-lg transition-all ${autoRefresh
+            className={`relative p-2.5 rounded-lg transition-all ${autoRefresh
               ? 'text-emerald-400 hover:bg-emerald-500/10'
               : 'text-gray-400 hover:text-white hover:bg-white/10'
               }`}
-            title={autoRefresh ? '自动刷新中（点击暂停）' : '自动刷新已暂停（点击开启）'}
+            aria-label={autoRefresh ? '暂停自动刷新' : '开启自动刷新'}
+            aria-pressed={autoRefresh}
           >
             {autoRefresh && (
               <svg
                 className="absolute inset-0 w-full h-full pointer-events-none"
                 viewBox="0 0 32 32"
                 fill="none"
+                aria-hidden="true"
               >
                 <circle
                   cx="16" cy="16" r="13"
@@ -776,13 +815,16 @@ export default function AdminPage() {
 
       {/* Error Banner */}
       {errorMsg && (
-        <div className="rounded-xl bg-rose-500/10 border border-rose-500/30 px-4 py-3 text-sm text-rose-400 flex items-center gap-2">
+        <div role="alert" className="rounded-xl bg-rose-500/10 border border-rose-500/30 px-4 py-3 text-sm text-rose-400 flex items-center gap-2">
           <XCircle size={16} />
           {errorMsg}
+          <button onClick={() => setErrorMsg('')} className="ml-auto p-1 hover:text-white transition-colors rounded" aria-label="关闭错误提示">
+            <XCircle size={14} />
+          </button>
         </div>
       )}
       {(tasksQuery.isError || thumbQuery.isError) && (
-        <div className="rounded-xl bg-rose-500/10 border border-rose-500/30 px-4 py-3 text-sm text-rose-400 flex items-center gap-2">
+        <div role="alert" className="rounded-xl bg-rose-500/10 border border-rose-500/30 px-4 py-3 text-sm text-rose-400 flex items-center gap-2">
           <XCircle size={16} />
           加载数据失败，请检查后端连接
         </div>
@@ -813,127 +855,110 @@ export default function AdminPage() {
         <ScoreDistributionPanel />
       </div>
 
-      {/* Sync Tasks Table */}
+      {/* Sync Tasks */}
       <div>
         <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-3">Sync Tasks</p>
-        <div className="rounded-xl border border-white/10 bg-white/5 backdrop-blur-sm overflow-x-auto shadow-sm">
-          {tasksQuery.isLoading ? (
-            <div className="flex justify-center items-center py-12">
-              <Loader2 size={24} className="animate-spin text-gray-500" />
-            </div>
-          ) : tasks.length === 0 ? (
-            <div className="text-center py-12 text-gray-500 text-sm">
-              暂无任务，点击「新建任务」开始
-            </div>
-          ) : (
-            <table className="w-full min-w-[640px] text-sm">
-              <thead>
-                <tr className="border-b border-white/10">
-                  <th className="text-left px-4 py-3 text-xs font-medium text-gray-400 uppercase tracking-wider">名称</th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-gray-400 uppercase tracking-wider">类型</th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-gray-400 uppercase tracking-wider">分类</th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-gray-400 uppercase tracking-wider">状态</th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-gray-400 uppercase tracking-wider w-56">进度</th>
-                  <th className="text-right px-4 py-3 text-xs font-medium text-gray-400 uppercase tracking-wider">操作</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/5">
-                {tasks.map((task) => {
-                  const progress = Number(task.progress_pct || 0);
-                  const isIncremental = task.type === 'incremental';
-                  const isFavorites = task.type === 'favorites';
-                  const dbCount = isIncremental
-                    ? (task.state?.scanned_count ?? null)
-                    : isFavorites
-                      ? null
-                      : (task.state?.db_count ?? null);
-                  const totalCount = isIncremental
-                    ? (task.config?.scan_window ?? null)
-                    : isFavorites
-                      ? null
-                      : (task.state?.total_count ?? null);
-                  const transition = isTransitioning(task);
-                  const displayStatus = getDisplayStatus(task);
-                  const rowAction = pendingByTask[task.id];
-                  const rowBusy = Boolean(rowAction);
+        {tasksQuery.isLoading ? (
+          <div className="rounded-xl border border-white/10 bg-white/5 flex justify-center items-center py-12">
+            <Loader2 size={24} className="animate-spin text-gray-500" />
+          </div>
+        ) : tasks.length === 0 ? (
+          <div className="rounded-xl border border-white/10 bg-white/5 text-center py-12 text-gray-500 text-sm">
+            暂无任务，点击「新建任务」开始
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {tasks.map((task) => {
+              const progress = Number(task.progress_pct || 0);
+              const isIncremental = task.type === 'incremental';
+              const isFavorites = task.type === 'favorites';
+              const dbCount = isIncremental
+                ? (task.state?.scanned_count ?? null)
+                : isFavorites
+                  ? null
+                  : (task.state?.db_count ?? null);
+              const totalCount = isIncremental
+                ? (task.config?.scan_window ?? null)
+                : isFavorites
+                  ? null
+                  : (task.state?.total_count ?? null);
+              const transition = isTransitioning(task);
+              const displayStatus = getDisplayStatus(task);
+              const rowAction = pendingByTask[task.id];
+              const rowBusy = Boolean(rowAction);
 
-                  const canStart = !rowBusy && !transition && task.status !== 'running'
-                    && (task.status !== 'completed' || task.type === 'favorites');
-                  const canStop = !rowBusy && !transition && task.status === 'running';
-                  const canDelete = !rowBusy && !transition && task.status !== 'running'
-                    && (task.desired_status !== 'running' || (task.type === 'favorites' && task.status === 'completed'));
+              const canStart = !rowBusy && !transition && task.status !== 'running'
+                && (task.status !== 'completed' || task.type === 'favorites');
+              const canStop = !rowBusy && !transition && task.status === 'running';
+              const canDelete = !rowBusy && !transition && task.status !== 'running'
+                && (task.desired_status !== 'running' || (task.type === 'favorites' && task.status === 'completed'));
 
-                  return (
-                    <tr
-                      key={task.id}
-                      className="group hover:bg-white/[0.04] transition-colors duration-100"
-                    >
-                      <td className="px-4 py-3.5 font-medium text-white">
-                        {task.name}
-                        {task.error_message && (
-                          <p className="text-xs text-rose-400 mt-0.5 truncate max-w-[200px]"
-                            title={task.error_message}>
-                            {task.error_message}
-                          </p>
-                        )}
-                      </td>
-                      <td className="px-4 py-3.5">
-                        <span className="text-xs font-mono text-gray-400 bg-white/5 px-2 py-0.5 rounded">
-                          {task.type}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3.5 text-gray-300">{formatTaskCategory(task)}</td>
-                      <td className="px-4 py-3.5">
+              return (
+                <div
+                  key={task.id}
+                  className="rounded-xl border border-white/10 bg-white/5 backdrop-blur-sm p-4 hover:border-white/20 transition-colors"
+                >
+                  {/* Row 1: name + status + actions */}
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-medium text-white text-sm">{task.name}</span>
+                        <span className="text-xs font-mono text-gray-400 bg-white/5 px-2 py-0.5 rounded">{task.type}</span>
                         <StatusBadge status={displayStatus} />
-                      </td>
-                      <td className="px-4 py-3.5">
-                        <GradientProgressBar
-                          progress={progress}
-                          dbCount={dbCount}
-                          totalCount={totalCount}
-                        />
-                      </td>
-                      <td className="px-4 py-3.5">
-                        <div className="flex items-center justify-end gap-1.5">
-                          {/* Start */}
-                          <button
-                            title="Start"
-                            disabled={!canStart}
-                            onClick={() => runTaskAction(task.id, 'start', () => startTask(task.id))}
-                            className="p-1.5 rounded-lg text-emerald-400 hover:bg-emerald-500/20 transition-all
-                                       disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
-                          >
-                            {rowAction === 'start' ? <Loader2 size={15} className="animate-spin" /> : <Play size={15} />}
-                          </button>
-                          {/* Stop */}
-                          <button
-                            title="Stop"
-                            disabled={!canStop}
-                            onClick={() => runTaskAction(task.id, 'stop', () => stopTask(task.id))}
-                            className="p-1.5 rounded-lg text-yellow-400 hover:bg-yellow-500/20 transition-all
-                                       disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
-                          >
-                            {rowAction === 'stop' ? <Loader2 size={15} className="animate-spin" /> : <Square size={15} />}
-                          </button>
-                          {/* Delete */}
-                          <button
-                            title="Delete"
-                            disabled={!canDelete}
-                            onClick={() => setDeleteTarget(task)}
-                            className="p-1.5 rounded-lg text-rose-400 hover:bg-rose-500/20 transition-all
-                                       disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
-                          >
-                            {rowAction === 'delete' ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          )}
-        </div>
+                      </div>
+                      <p className="text-xs text-gray-500 mt-1">{formatTaskCategory(task)}</p>
+                      {task.error_message && (
+                        <p className="text-xs text-rose-400 mt-1 truncate" title={task.error_message}>
+                          {task.error_message}
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        title="启动"
+                        aria-label={`启动任务 ${task.name}`}
+                        disabled={!canStart}
+                        onClick={() => runTaskAction(task.id, 'start', () => startTask(task.id))}
+                        className="p-2 rounded-lg text-emerald-400 hover:bg-emerald-500/20 transition-all
+                                   disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                      >
+                        {rowAction === 'start' ? <Loader2 size={15} className="animate-spin" /> : <Play size={15} />}
+                      </button>
+                      <button
+                        title="停止"
+                        aria-label={`停止任务 ${task.name}`}
+                        disabled={!canStop}
+                        onClick={() => runTaskAction(task.id, 'stop', () => stopTask(task.id))}
+                        className="p-2 rounded-lg text-yellow-400 hover:bg-yellow-500/20 transition-all
+                                   disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                      >
+                        {rowAction === 'stop' ? <Loader2 size={15} className="animate-spin" /> : <Square size={15} />}
+                      </button>
+                      <button
+                        title="删除"
+                        aria-label={`删除任务 ${task.name}`}
+                        disabled={!canDelete}
+                        onClick={() => setDeleteTarget(task)}
+                        className="p-2 rounded-lg text-rose-400 hover:bg-rose-500/20 transition-all
+                                   disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                      >
+                        {rowAction === 'delete' ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
+                      </button>
+                    </div>
+                  </div>
+                  {/* Row 2: progress */}
+                  <div className="mt-3">
+                    <GradientProgressBar
+                      progress={progress}
+                      dbCount={dbCount}
+                      totalCount={totalCount}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Create Task Modal */}

@@ -125,7 +125,9 @@ func (c *Client) FetchPage(ctx context.Context, pageURL string) (string, string,
 	return body, ResultOK, nil
 }
 
-// FetchThumb downloads a thumbnail image. Uses a simple HTTP GET without TLS fingerprinting.
+// FetchThumb downloads a thumbnail image.
+// Cookies are added explicitly because the thumbnail CDN domain (e.g. ehgt.org)
+// differs from ExBaseURL, so the cookiejar won't send them automatically.
 func (c *Client) FetchThumb(ctx context.Context, thumbURL string) ([]byte, int, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", thumbURL, nil)
 	if err != nil {
@@ -133,6 +135,11 @@ func (c *Client) FetchThumb(ctx context.Context, thumbURL string) ([]byte, int, 
 	}
 	req.Header.Set("Referer", c.cfg.ExBaseURL)
 	req.Header.Set("User-Agent", c.cfg.Headers.Get("User-Agent"))
+
+	// Explicitly attach cookies regardless of domain
+	for k, v := range c.cfg.Cookies {
+		req.AddCookie(&http.Cookie{Name: k, Value: v})
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
