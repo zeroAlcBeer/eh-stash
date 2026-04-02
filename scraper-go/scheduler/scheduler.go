@@ -70,7 +70,7 @@ func (s *Scheduler) Run(ctx context.Context) {
 		done <- struct{}{}
 	}()
 	go func() {
-		worker.RunRecommendedScorer(workerCtx, s.db, s.signals.ScorerReset)
+		worker.RunRecommendedScorerReverse(workerCtx, s.db, s.signals.ScorerReset)
 		done <- struct{}{}
 	}()
 	go func() {

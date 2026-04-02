@@ -34,6 +34,7 @@ func RunFavoritesOnce(
 
 	var collectedGIDs []int64
 	failedGIDs := make(map[int64]bool)
+	hasNewFavorites := false // track if any page had new favorites
 
 	for {
 		select {
@@ -183,11 +184,14 @@ func RunFavoritesOnce(
 				FavoritedAt: item.FavoritedAt,
 			})
 		}
-		favCount, err := database.UpsertFavorites(ctx, favRows)
+		newCount, err := database.UpsertFavoritesCountNew(ctx, favRows)
 		if err != nil {
 			slog.Error(fmt.Sprintf("[FAV  ] [%s] upsert favorites failed", name), "error", err)
 		} else {
-			slog.Info(fmt.Sprintf("[FAV  ] [%s] upserted %d favorites", name, favCount))
+			if newCount > 0 {
+				hasNewFavorites = true
+			}
+			slog.Info(fmt.Sprintf("[FAV  ] [%s] upserted favorites, %d new", name, newCount))
 		}
 
 		collectedGIDs = append(collectedGIDs, pageGIDs...)
@@ -208,17 +212,19 @@ func RunFavoritesOnce(
 	}
 
 	// Full traversal completed
+	hasRemovedFavorites := false
 	if !isResuming && len(collectedGIDs) > 0 {
 		removed, err := database.CleanupStaleFavorites(ctx, collectedGIDs)
 		if err != nil {
 			slog.Error(fmt.Sprintf("[FAV  ] [%s] cleanup failed", name), "error", err)
 		} else if removed > 0 {
+			hasRemovedFavorites = true
 			slog.Info(fmt.Sprintf("[FAV  ] [%s] cleanup: removed %d stale favorites", name, removed))
 		}
 	}
 
-	// Rebuild preference tags once
-	if len(collectedGIDs) > 0 {
+	// Rebuild preference tags only if favorites actually changed
+	if hasNewFavorites || hasRemovedFavorites {
 		tagCount, err := database.RebuildPreferenceTags(ctx)
 		if err != nil {
 			slog.Error(fmt.Sprintf("[FAV  ] [%s] rebuild preference tags failed", name), "error", err)
@@ -226,6 +232,8 @@ func RunFavoritesOnce(
 			slog.Info(fmt.Sprintf("[FAV  ] [%s] rebuilt %d preference tags", name, tagCount))
 			notify(signals.ScorerReset)
 		}
+	} else if len(collectedGIDs) > 0 {
+		slog.Info(fmt.Sprintf("[FAV  ] [%s] no favorites changed, skipping rebuild and scorer", name))
 	}
 
 	slog.Info(fmt.Sprintf("[FAV  ] [%s] completed round=%d, total=%d favorites",

@@ -4,11 +4,40 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/CheerChen/eh-stash/scraper-go/db"
 	"github.com/CheerChen/eh-stash/scraper-go/parser"
 )
+
+var (
+	// Markers to strip for base_title normalization:
+	// [中国翻訳] [中国語] — translation markers
+	// [DL版] — digital version
+	// [無修正] — uncensored
+	// (C\d+) — Comiket convention prefix e.g. (C107)
+	stripMarkersRE = regexp.MustCompile(
+		`\s*\[中国翻訳\]|\s*\[中国語\]|\s*\[DL版\]|\s*\[無修正\]|\s*\(C\d+\)`,
+	)
+	whitespaceRE = regexp.MustCompile(`\s+`)
+)
+
+// NormalizeBaseTitle computes the normalized base_title for grouping.
+// Prefers title_jpn, falls back to title if empty.
+func NormalizeBaseTitle(titleJPN, title string) string {
+	src := titleJPN
+	if src == "" {
+		src = title
+	}
+	if src == "" {
+		return ""
+	}
+	s := stripMarkersRE.ReplaceAllString(src, "")
+	s = whitespaceRE.ReplaceAllString(s, "")
+	return strings.TrimSpace(s)
+}
 
 // FavSignals holds channels needed by the favorites task.
 type FavSignals struct {
@@ -110,6 +139,7 @@ func BuildUpsertRow(gid int64, token string, detail *parser.GalleryDetail, isAct
 		Category:     detail.Category,
 		Title:        detail.Title,
 		TitleJPN:     detail.TitleJPN,
+		BaseTitle:    NormalizeBaseTitle(detail.TitleJPN, detail.Title),
 		Uploader:     detail.Uploader,
 		PostedAt:     postedAt,
 		Language:     detail.Language,

@@ -8,13 +8,11 @@ import (
 	"github.com/CheerChen/eh-stash/scraper-go/db"
 )
 
-const (
-	grouperIdleInterval = 60 * time.Second
-	grouperDebounce     = 30 * time.Second // wait 30s after first trigger, merge all signals
-)
+const grouperIdleInterval = 60 * time.Second
 
 // RunGalleryGrouper maintains gallery_group_members.
-// Event-driven with debounce: collects triggers for 30s, then runs once.
+// Event-driven: runs incremental grouping on each trigger signal.
+// With base_title indexed column, each run is <20ms — no debounce needed.
 func RunGalleryGrouper(ctx context.Context, database *db.DB, triggerCh <-chan struct{}) {
 	slog.Info("[GROUP] gallery grouper started")
 
@@ -39,34 +37,15 @@ func RunGalleryGrouper(ctx context.Context, database *db.DB, triggerCh <-chan st
 	}
 
 	for {
-		// Wait for first trigger
 		select {
 		case <-triggerCh:
-			// got first signal, start debounce window
+			// triggered
 		case <-time.After(grouperIdleInterval):
 			continue
 		case <-ctx.Done():
 			slog.Info("[GROUP] grouper stopped")
 			return
 		}
-
-		// Debounce: drain all signals during the window
-		timer := time.NewTimer(grouperDebounce)
-		merged := 1
-	drain:
-		for {
-			select {
-			case <-triggerCh:
-				merged++
-			case <-timer.C:
-				break drain
-			case <-ctx.Done():
-				timer.Stop()
-				return
-			}
-		}
-
-		slog.Info("[GROUP] running incremental after debounce", "merged_signals", merged)
 
 		count, err := database.GalleryGroupIncremental(ctx)
 		if err != nil {

@@ -46,6 +46,7 @@ type GalleryRow struct {
 	Category     string
 	Title        string
 	TitleJPN     string
+	BaseTitle    string // normalized title for grouping
 	Uploader     string
 	PostedAt     *time.Time
 	Language     string
@@ -97,25 +98,26 @@ func (d *DB) UpsertGalleriesBulk(ctx context.Context, rows []GalleryRow) (int, e
 	for _, r := range rows {
 		tagsJSON, _ := json.Marshal(r.Tags)
 		values = append(values, fmt.Sprintf(
-			"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d::jsonb,NOW(),$%d)",
+			"($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d::jsonb,NOW(),$%d)",
 			idx, idx+1, idx+2, idx+3, idx+4, idx+5, idx+6, idx+7,
-			idx+8, idx+9, idx+10, idx+11, idx+12, idx+13, idx+14,
+			idx+8, idx+9, idx+10, idx+11, idx+12, idx+13, idx+14, idx+15,
 		))
 		args = append(args,
-			r.GID, r.Token, r.Category, r.Title, r.TitleJPN, r.Uploader,
+			r.GID, r.Token, r.Category, r.Title, r.TitleJPN, r.BaseTitle, r.Uploader,
 			r.PostedAt, r.Language, r.Pages, r.Rating, r.FavCount,
 			r.CommentCount, r.Thumb, string(tagsJSON), r.IsActive,
 		)
-		idx += 15
+		idx += 16
 	}
 
 	sql := `INSERT INTO eh_galleries (
-		gid, token, category, title, title_jpn, uploader, posted_at, language,
+		gid, token, category, title, title_jpn, base_title, uploader, posted_at, language,
 		pages, rating, fav_count, comment_count, thumb, tags, last_synced_at, is_active
 	) VALUES ` + strings.Join(values, ",") + `
 	ON CONFLICT (gid) DO UPDATE SET
 		token = EXCLUDED.token, category = EXCLUDED.category,
 		title = EXCLUDED.title, title_jpn = EXCLUDED.title_jpn,
+		base_title = EXCLUDED.base_title,
 		uploader = EXCLUDED.uploader, posted_at = EXCLUDED.posted_at,
 		language = EXCLUDED.language, pages = EXCLUDED.pages,
 		rating = EXCLUDED.rating, fav_count = EXCLUDED.fav_count,
@@ -398,6 +400,52 @@ type FavoriteRow struct {
 	FavoritedAt *string
 }
 
+// UpsertFavoritesCountNew inserts favorites and returns the count of genuinely new rows.
+func (d *DB) UpsertFavoritesCountNew(ctx context.Context, favorites []FavoriteRow) (int, error) {
+	if len(favorites) == 0 {
+		return 0, nil
+	}
+
+	gids := make([]int64, len(favorites))
+	tsArr := make([]*string, len(favorites))
+	for i, f := range favorites {
+		gids[i] = f.GID
+		tsArr[i] = f.FavoritedAt
+	}
+
+	// Count existing favorites before upsert
+	var existingCount int
+	err := d.pool.QueryRow(ctx,
+		"SELECT COUNT(*) FROM user_favorites WHERE gid = ANY($1)", gids,
+	).Scan(&existingCount)
+	if err != nil {
+		return 0, err
+	}
+
+	// Upsert
+	tag, err := d.pool.Exec(ctx, `
+		INSERT INTO user_favorites (gid, favorited_at)
+		SELECT v.gid, COALESCE((ts.val)::timestamptz, NOW())
+		FROM unnest($1::bigint[]) AS v(gid)
+		JOIN eh_galleries g ON g.gid = v.gid
+		LEFT JOIN (
+			SELECT * FROM unnest($1::bigint[], $2::text[]) AS t(gid, val)
+		) ts ON ts.gid = v.gid
+		ON CONFLICT (gid) DO UPDATE SET favorited_at = EXCLUDED.favorited_at
+	`, gids, tsArr)
+	if err != nil {
+		return 0, err
+	}
+
+	// New = total affected - previously existing
+	totalAffected := int(tag.RowsAffected())
+	newCount := totalAffected - existingCount
+	if newCount < 0 {
+		newCount = 0
+	}
+	return newCount, nil
+}
+
 func (d *DB) CleanupStaleFavorites(ctx context.Context, allGIDs []int64) (int, error) {
 	if len(allGIDs) == 0 {
 		tag, err := d.pool.Exec(ctx,
@@ -587,6 +635,115 @@ func (d *DB) ScoreRecommendedBatch(ctx context.Context, cursorGID *int64, batchS
 	return gids, nextCursor, nil
 }
 
+// PreferenceTag represents a row from preference_tags.
+type PreferenceTag struct {
+	Namespace string
+	Tag       string
+	Weight    float64
+}
+
+// ListPreferenceTags returns all preference tags.
+func (d *DB) ListPreferenceTags(ctx context.Context) ([]PreferenceTag, error) {
+	rows, err := d.pool.Query(ctx, "SELECT namespace, tag, weight FROM preference_tags")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tags []PreferenceTag
+	for rows.Next() {
+		var t PreferenceTag
+		if err := rows.Scan(&t.Namespace, &t.Tag, &t.Weight); err != nil {
+			return nil, err
+		}
+		tags = append(tags, t)
+	}
+	return tags, rows.Err()
+}
+
+// FindGIDsByTag returns all active gallery GIDs that contain the given tag.
+// Uses the GIN index on tags column.
+func (d *DB) FindGIDsByTag(ctx context.Context, namespace, tag string) ([]int64, error) {
+	jsonPattern := fmt.Sprintf(`{"%s": ["%s"]}`, namespace, tag)
+	rows, err := d.pool.Query(ctx,
+		"SELECT gid FROM eh_galleries WHERE is_active = TRUE AND tags @> $1::jsonb",
+		jsonPattern)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var gids []int64
+	for rows.Next() {
+		var gid int64
+		if err := rows.Scan(&gid); err != nil {
+			return nil, err
+		}
+		gids = append(gids, gid)
+	}
+	return gids, rows.Err()
+}
+
+// ReplaceRecommendedCache replaces the entire recommended_cache with new scores.
+func (d *DB) ReplaceRecommendedCache(ctx context.Context, scores map[int64]float64, threshold float64) (int, error) {
+	tx, err := d.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+
+	_, err = tx.Exec(ctx, "TRUNCATE recommended_cache")
+	if err != nil {
+		return 0, err
+	}
+
+	if len(scores) == 0 {
+		return 0, tx.Commit(ctx)
+	}
+
+	// Batch insert
+	var values []string
+	var args []any
+	idx := 1
+	for gid, score := range scores {
+		if score < threshold {
+			continue
+		}
+		values = append(values, fmt.Sprintf("($%d,$%d)", idx, idx+1))
+		args = append(args, gid, score)
+		idx += 2
+
+		// Flush in batches of 1000
+		if len(values) >= 1000 {
+			_, err = tx.Exec(ctx,
+				"INSERT INTO recommended_cache (gid, rec_score) VALUES "+strings.Join(values, ","),
+				args...)
+			if err != nil {
+				return 0, err
+			}
+			values = values[:0]
+			args = args[:0]
+			idx = 1
+		}
+	}
+
+	inserted := 0
+	if len(values) > 0 {
+		tag, err := tx.Exec(ctx,
+			"INSERT INTO recommended_cache (gid, rec_score) VALUES "+strings.Join(values, ","),
+			args...)
+		if err != nil {
+			return 0, err
+		}
+		inserted = int(tag.RowsAffected())
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return inserted, nil
+}
+
 func (d *DB) GalleryGroupFullRebuild(ctx context.Context) (int, error) {
 	tx, err := d.pool.Begin(ctx)
 	if err != nil {
@@ -600,17 +757,14 @@ func (d *DB) GalleryGroupFullRebuild(ctx context.Context) (int, error) {
 	}
 
 	tag, err := tx.Exec(ctx, `
-		WITH base AS (
-			SELECT gid, REGEXP_REPLACE(REGEXP_REPLACE(title_jpn, '\s*\[中国翻訳\]', '', 'g'), '\s+', '', 'g') AS base_title
-			FROM eh_galleries
-			WHERE title_jpn IS NOT NULL AND title_jpn != ''
-		),
-		multi AS (
-			SELECT base_title FROM base GROUP BY base_title HAVING COUNT(*) > 1
+		WITH multi AS (
+			SELECT base_title FROM eh_galleries
+			WHERE base_title IS NOT NULL AND base_title != ''
+			GROUP BY base_title HAVING COUNT(*) > 1
 		),
 		grouped AS (
-			SELECT MIN(b.gid) OVER (PARTITION BY b.base_title) AS group_id, b.gid
-			FROM base b JOIN multi m ON b.base_title = m.base_title
+			SELECT MIN(g.gid) OVER (PARTITION BY g.base_title) AS group_id, g.gid
+			FROM eh_galleries g JOIN multi m ON g.base_title = m.base_title
 		)
 		INSERT INTO gallery_group_members (group_id, gid)
 		SELECT group_id, gid FROM grouped
@@ -629,17 +783,16 @@ func (d *DB) GalleryGroupFullRebuild(ctx context.Context) (int, error) {
 func (d *DB) GalleryGroupIncremental(ctx context.Context) (int, error) {
 	tag, err := d.pool.Exec(ctx, `
 		WITH new_galleries AS (
-			SELECT gid, REGEXP_REPLACE(REGEXP_REPLACE(title_jpn, '\s*\[中国翻訳\]', '', 'g'), '\s+', '', 'g') AS base_title
+			SELECT gid, base_title
 			FROM eh_galleries
-			WHERE title_jpn IS NOT NULL AND title_jpn != ''
+			WHERE base_title IS NOT NULL AND base_title != ''
 			  AND gid NOT IN (SELECT gid FROM gallery_group_members)
 		),
 		matching AS (
-			SELECT gid, REGEXP_REPLACE(REGEXP_REPLACE(title_jpn, '\s*\[中国翻訳\]', '', 'g'), '\s+', '', 'g') AS base_title
-			FROM eh_galleries
-			WHERE title_jpn IS NOT NULL AND title_jpn != ''
-			  AND REGEXP_REPLACE(REGEXP_REPLACE(title_jpn, '\s*\[中国翻訳\]', '', 'g'), '\s+', '', 'g')
-				  IN (SELECT base_title FROM new_galleries)
+			SELECT g.gid, g.base_title
+			FROM eh_galleries g
+			WHERE g.base_title IS NOT NULL AND g.base_title != ''
+			  AND g.base_title IN (SELECT base_title FROM new_galleries)
 		),
 		multi AS (
 			SELECT base_title FROM matching GROUP BY base_title HAVING COUNT(*) > 1
