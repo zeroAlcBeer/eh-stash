@@ -1,34 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { X, Star, Heart, FileText, Globe, Calendar, ExternalLink } from 'lucide-react';
 import { fetchGalleryGroup } from '../api';
-
-const isAndroid = /Android/i.test(navigator.userAgent);
-
-const getExUrl = (gid, token) => {
-  const https = `https://exhentai.org/g/${gid}/${token}/`;
-  if (isAndroid) {
-    const fallback = encodeURIComponent(https);
-    return `intent://exhentai.org/g/${gid}/${token}/#Intent;scheme=https;S.browser_fallback_url=${fallback};end`;
-  }
-  return https;
-};
-
-const CATEGORY_STYLES = {
-  'Manga': 'bg-orange-500/80',
-  'Doujinshi': 'bg-rose-600/80',
-  'Cosplay': 'bg-purple-600/80',
-  'Asian Porn': 'bg-pink-600/80',
-  'Non-H': 'bg-blue-600/80',
-  'Western': 'bg-emerald-600/80',
-  'Image Set': 'bg-indigo-600/80',
-  'Game CG': 'bg-teal-600/80',
-  'Artist CG': 'bg-yellow-500/80',
-  'Misc': 'bg-zinc-600/80',
-};
+import { getExUrl, LINK_TARGET, CATEGORY_STYLES, FALLBACK_IMAGE } from '../shared/gallery';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 
 export default function GroupModal({ groupId, onClose }) {
   const [galleries, setGalleries] = useState([]);
   const [loading, setLoading] = useState(true);
+  const dialogRef = useFocusTrap(Boolean(groupId), onClose);
 
   useEffect(() => {
     if (!groupId) return;
@@ -39,18 +18,16 @@ export default function GroupModal({ groupId, onClose }) {
       .finally(() => setLoading(false));
   }, [groupId]);
 
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
   if (!groupId) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center" onClick={onClose}>
       <div className="absolute inset-0 bg-black/60" />
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={loading ? '加载中' : `${galleries.length} 个版本`}
         className="relative bg-zinc-900 rounded-lg ring-1 ring-white/10 w-full max-w-2xl max-h-[80vh] overflow-y-auto m-4"
         onClick={(e) => e.stopPropagation()}
       >
@@ -59,7 +36,11 @@ export default function GroupModal({ groupId, onClose }) {
           <span className="text-sm font-medium text-gray-200">
             {loading ? '加载中...' : `${galleries.length} 个版本`}
           </span>
-          <button onClick={onClose} className="text-gray-500 hover:text-white">
+          <button
+            onClick={onClose}
+            className="p-2 -mr-1 text-gray-500 hover:text-white rounded-lg hover:bg-white/10 transition-colors"
+            aria-label="关闭"
+          >
             <X size={18} />
           </button>
         </div>
@@ -78,14 +59,16 @@ export default function GroupModal({ groupId, onClose }) {
               <a
                 key={g.gid}
                 href={exUrl}
-                target={isAndroid ? '_self' : '_blank'}
+                target={LINK_TARGET}
                 rel="noopener noreferrer"
                 className="flex gap-3 rounded-lg bg-zinc-800 ring-1 ring-white/5 hover:ring-amber-400/60 transition-all p-2.5"
               >
                 {/* Thumbnail */}
                 <img
-                  src={g.thumb ? `/v1/thumbs/${g.gid}` : undefined}
+                  src={g.thumb ? `/v1/thumbs/${g.gid}` : FALLBACK_IMAGE}
                   alt={displayTitle}
+                  width={60}
+                  height={84}
                   className="w-[60px] h-[84px] object-contain bg-zinc-950 rounded shrink-0"
                   loading="lazy"
                 />
@@ -96,7 +79,7 @@ export default function GroupModal({ groupId, onClose }) {
                     {displayTitle}
                   </p>
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500">
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold text-white ${catStyle}`}>
+                    <span className={`px-1.5 py-0.5 rounded text-xs font-bold text-white ${catStyle}`}>
                       {g.category}
                     </span>
                     <span className="flex items-center gap-0.5 text-amber-400">

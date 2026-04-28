@@ -3,8 +3,24 @@ import GalleryPage from './pages/GalleryPage';
 import FavoritesPage from './pages/FavoritesPage';
 import RecommendedPage from './pages/RecommendedPage';
 import AdminPage from './pages/AdminPage';
-import { BrowserRouter, NavLink, Route, Routes } from 'react-router-dom';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { BrowserRouter, NavLink, Route, Routes, Link } from 'react-router-dom';
 import { Heart, LayoutGrid, Sparkles } from 'lucide-react';
+
+function NotFoundPage() {
+  return (
+    <div className="flex flex-col items-center justify-center py-24 text-center">
+      <p className="text-6xl font-bold text-gray-700 mb-2">404</p>
+      <p className="text-sm text-gray-500 mb-4">页面不存在</p>
+      <Link
+        to="/"
+        className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium transition-colors"
+      >
+        返回首页
+      </Link>
+    </div>
+  );
+}
 
 function App() {
   return (
@@ -61,12 +77,15 @@ function App() {
 
         {/* Main */}
         <main className="flex-1 max-w-screen-2xl mx-auto w-full px-4 pt-4">
-          <Routes>
-            <Route path="/" element={<GalleryPage key="gallery" />} />
-            <Route path="/recommended" element={<RecommendedPage key="recommended" />} />
-            <Route path="/favorites" element={<FavoritesPage key="favorites" />} />
-            <Route path="/admin" element={<AdminPage />} />
-          </Routes>
+          <ErrorBoundary>
+            <Routes>
+              <Route path="/" element={<GalleryPage key="gallery" />} />
+              <Route path="/recommended" element={<RecommendedPage key="recommended" />} />
+              <Route path="/favorites" element={<FavoritesPage key="favorites" />} />
+              <Route path="/admin" element={<AdminPage />} />
+              <Route path="*" element={<NotFoundPage />} />
+            </Routes>
+          </ErrorBoundary>
         </main>
       </div>
     </BrowserRouter>

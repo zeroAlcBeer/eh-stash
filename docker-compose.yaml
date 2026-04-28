@@ -19,14 +19,13 @@ services:
       retries: 5
 
   scraper:
-    build: ./scraper
+    build: ./scraper-go
     depends_on:
       postgres:
         condition: service_healthy
     env_file: .env
     restart: unless-stopped
     volumes:
-      - ./scraper:/app
       - thumbs_data:/data/thumbs
 
   api:
