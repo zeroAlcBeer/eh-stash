@@ -7,9 +7,10 @@ from pydantic import BaseModel
 
 from db import get_db
 from models import (
+    EmbeddingsStatus,
     FAVORITES_CATEGORY,
     MIXED_CATEGORY,
-    ScoreDistribution,
+    SimilarityDistribution,
     SyncTask,
     SyncTaskCreate,
     SyncTaskUpdate,
@@ -294,47 +295,71 @@ def thumb_queue_stats(db=Depends(get_db)):
     )
 
 
-# ── Recommended Score Distribution ────────────────────────────────────────────
+# ── Similarity Distribution & Threshold (cosine recommendation) ───────────────
 
-_recommend_threshold: float = 20.0
+DEFAULT_SIMILARITY_THRESHOLD = 0.3
 
 
-@router.get("/recommended/distribution", response_model=ScoreDistribution)
-def recommended_distribution(buckets: int = Query(40, ge=10, le=200), db=Depends(get_db)):
-    threshold = _recommend_threshold
-
-    # Get score range
-    db.execute("SELECT MIN(rec_score), MAX(rec_score), COUNT(*) FROM recommended_cache")
+def get_similarity_threshold(db) -> float:
+    """Read the persisted similarity threshold from app_settings."""
+    db.execute("SELECT value FROM app_settings WHERE key = 'similarity_threshold'")
     row = db.fetchone()
-    min_score, max_score, total = row
-    if not total or total == 0:
-        return ScoreDistribution(buckets=[], total=0, threshold=threshold, count_above=0)
+    if not row:
+        return DEFAULT_SIMILARITY_THRESHOLD
+    try:
+        return float(row[0])
+    except (TypeError, ValueError):
+        return DEFAULT_SIMILARITY_THRESHOLD
 
-    # Build histogram with width_bucket
-    bucket_width = (max_score - min_score) / buckets if max_score > min_score else 1.0
+
+@router.get("/recommended/distribution", response_model=SimilarityDistribution)
+def recommended_distribution(buckets: int = Query(40, ge=10, le=200), db=Depends(get_db)):
+    threshold = get_similarity_threshold(db)
+
+    # Compute similarity for every gallery whose embedding exists, against the
+    # single user_profile vector. Materialize once in a CTE to drive both the
+    # histogram and the count-above-threshold.
+    # similarity is precomputed in recommended_cache by the embeddings worker.
+    # Reading is now an indexed column scan; no per-request cosine compute.
     db.execute(
         """
-        SELECT
-            width_bucket(rec_score, %(min)s, %(max_adj)s, %(n)s) AS bucket,
-            COUNT(*) AS cnt
+        SELECT COUNT(*), COALESCE(MIN(similarity), 0)::float, COALESCE(MAX(similarity), 1)::float
         FROM recommended_cache
+        WHERE similarity IS NOT NULL
+        """,
+    )
+    total, lo, hi = db.fetchone()
+    if not total or total == 0:
+        return SimilarityDistribution(buckets=[], total=0, threshold=threshold, count_above=0)
+
+    lo = max(0.0, min(1.0, lo))
+    hi = max(lo, min(1.0, hi))
+    bucket_width = (hi - lo) / buckets if hi > lo else 1.0
+
+    db.execute(
+        """
+        SELECT width_bucket(similarity, %(lo)s, %(hi_adj)s, %(n)s) AS bucket, COUNT(*) AS cnt
+        FROM recommended_cache
+        WHERE similarity IS NOT NULL
         GROUP BY bucket
         ORDER BY bucket
         """,
-        {"min": min_score, "max_adj": max_score + 0.001, "n": buckets},
+        {"lo": lo, "hi_adj": hi + 1e-6, "n": buckets},
     )
     bucket_map = {r[0]: r[1] for r in db.fetchall()}
     result = []
     for i in range(1, buckets + 1):
-        lo = min_score + (i - 1) * bucket_width
-        hi = min_score + i * bucket_width
-        result.append({"min": round(lo, 2), "max": round(hi, 2), "count": bucket_map.get(i, 0)})
+        b_lo = lo + (i - 1) * bucket_width
+        b_hi = lo + i * bucket_width
+        result.append({"min": round(b_lo, 4), "max": round(b_hi, 4), "count": bucket_map.get(i, 0)})
 
-    # Count above threshold
-    db.execute("SELECT COUNT(*) FROM recommended_cache WHERE rec_score >= %s", (threshold,))
+    db.execute(
+        "SELECT COUNT(*) FROM recommended_cache WHERE similarity >= %s",
+        (threshold,),
+    )
     count_above = db.fetchone()[0]
 
-    return ScoreDistribution(buckets=result, total=total, threshold=threshold, count_above=count_above)
+    return SimilarityDistribution(buckets=result, total=total, threshold=threshold, count_above=count_above)
 
 
 class ThresholdUpdate(BaseModel):
@@ -342,9 +367,42 @@ class ThresholdUpdate(BaseModel):
 
 
 @router.put("/recommended/threshold")
-def update_threshold(payload: ThresholdUpdate):
-    global _recommend_threshold
-    if payload.threshold < 0:
-        raise HTTPException(status_code=422, detail="Threshold must be non-negative")
-    _recommend_threshold = payload.threshold
+def update_threshold(payload: ThresholdUpdate, db=Depends(get_db)):
+    if payload.threshold < 0 or payload.threshold > 1:
+        raise HTTPException(status_code=422, detail="Threshold must be in [0, 1]")
+    db.execute(
+        """
+        INSERT INTO app_settings (key, value) VALUES ('similarity_threshold', %s::jsonb)
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+        """,
+        (json.dumps(payload.threshold),),
+    )
     return {"threshold": payload.threshold}
+
+
+@router.get("/recommended/embeddings-status", response_model=EmbeddingsStatus)
+def embeddings_status(db=Depends(get_db)):
+    db.execute(
+        """
+        SELECT
+            (SELECT COUNT(*) FROM tag_vocabulary WHERE is_active = TRUE),
+            (SELECT dim_count FROM tag_vocabulary_meta WHERE id = 1),
+            (SELECT COUNT(*) FROM eh_galleries WHERE is_active = TRUE),
+            (SELECT COUNT(*) FROM recommended_cache rc JOIN eh_galleries g ON g.gid = rc.gid
+              WHERE g.is_active = TRUE AND rc.tag_embedding IS NOT NULL),
+            (SELECT COUNT(*) FROM recommended_cache rc JOIN eh_galleries g ON g.gid = rc.gid
+              WHERE g.is_active = TRUE AND rc.tag_embedding IS NULL),
+            (SELECT liked_count FROM user_profile WHERE id = 1),
+            (SELECT embedding IS NOT NULL FROM user_profile WHERE id = 1)
+        """
+    )
+    vocab_size, dim_count, total_g, embedded, pending, liked, ready = db.fetchone()
+    return EmbeddingsStatus(
+        vocab_size=vocab_size or 0,
+        dim_count=dim_count or 0,
+        total_galleries=total_g or 0,
+        embedded_count=embedded or 0,
+        pending_count=pending or 0,
+        profile_liked_count=liked or 0,
+        profile_ready=bool(ready),
+    )

@@ -21,7 +21,7 @@ const (
 
 // Signals holds channels for inter-component communication.
 type Signals struct {
-	ScorerReset    chan struct{}
+	ProfileUpdate  chan struct{}
 	GrouperTrigger chan struct{}
 	ThumbNotify    chan struct{}
 }
@@ -70,7 +70,7 @@ func (s *Scheduler) Run(ctx context.Context) {
 		done <- struct{}{}
 	}()
 	go func() {
-		worker.RunRecommendedScorerReverse(workerCtx, s.db, s.signals.ScorerReset)
+		worker.RunEmbeddings(workerCtx, s.db, s.signals.ProfileUpdate)
 		done <- struct{}{}
 	}()
 	go func() {
@@ -254,7 +254,7 @@ func (s *Scheduler) runTask(ctx context.Context, taskID int) error {
 
 		case "favorites":
 			favSignals := &task.FavSignals{
-				ScorerReset:    s.signals.ScorerReset,
+				ProfileUpdate:  s.signals.ProfileUpdate,
 				GrouperTrigger: s.signals.GrouperTrigger,
 			}
 			done, err := task.RunFavoritesOnce(ctx, s.db, s.client, s.cfg, taskID, runtime, favSignals)

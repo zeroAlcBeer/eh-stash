@@ -223,17 +223,12 @@ func RunFavoritesOnce(
 		}
 	}
 
-	// Rebuild preference tags only if favorites actually changed
+	// Signal embeddings worker to recompute user_profile when favorites changed.
 	if hasNewFavorites || hasRemovedFavorites {
-		tagCount, err := database.RebuildPreferenceTags(ctx)
-		if err != nil {
-			slog.Error(fmt.Sprintf("[FAV  ] [%s] rebuild preference tags failed", name), "error", err)
-		} else {
-			slog.Info(fmt.Sprintf("[FAV  ] [%s] rebuilt %d preference tags", name, tagCount))
-			notify(signals.ScorerReset)
-		}
+		notify(signals.ProfileUpdate)
+		slog.Info(fmt.Sprintf("[FAV  ] [%s] favorites changed, profile update signaled", name))
 	} else if len(collectedGIDs) > 0 {
-		slog.Info(fmt.Sprintf("[FAV  ] [%s] no favorites changed, skipping rebuild and scorer", name))
+		slog.Info(fmt.Sprintf("[FAV  ] [%s] no favorites changed, skipping profile update", name))
 	}
 
 	slog.Info(fmt.Sprintf("[FAV  ] [%s] completed round=%d, total=%d favorites",

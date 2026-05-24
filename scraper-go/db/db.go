@@ -158,6 +158,30 @@ func (d *DB) UpsertGalleriesBulk(ctx context.Context, rows []GalleryRow) (int, e
 		}
 	}
 
+	// Maintain invariant: every gallery row has a matching recommended_cache row
+	// so the embeddings worker can pick it up via the partial index without
+	// needing a LEFT JOIN.
+	var rcValues []string
+	var rcArgs []any
+	rcIdx := 1
+	for _, r := range rows {
+		if !r.IsActive {
+			continue
+		}
+		rcValues = append(rcValues, fmt.Sprintf("($%d)", rcIdx))
+		rcArgs = append(rcArgs, r.GID)
+		rcIdx++
+	}
+	if len(rcValues) > 0 {
+		_, err = tx.Exec(ctx,
+			`INSERT INTO recommended_cache (gid) VALUES `+strings.Join(rcValues, ",")+
+				` ON CONFLICT (gid) DO NOTHING`,
+			rcArgs...)
+		if err != nil {
+			return 0, fmt.Errorf("upsert recommended_cache: %w", err)
+		}
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return 0, err
 	}
@@ -490,258 +514,6 @@ func (d *DB) GetNonExistingGIDs(ctx context.Context, gids []int64) ([]int64, err
 		result = append(result, gid)
 	}
 	return result, rows.Err()
-}
-
-func (d *DB) RebuildPreferenceTags(ctx context.Context) (int, error) {
-	tx, err := d.pool.Begin(ctx)
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback(ctx)
-
-	_, err = tx.Exec(ctx, "TRUNCATE preference_tags")
-	if err != nil {
-		return 0, err
-	}
-
-	tag, err := tx.Exec(ctx, `
-		WITH fav_tf AS (
-			SELECT ns, tag_value, COUNT(*)::REAL AS tf
-			FROM eh_galleries g
-			JOIN user_favorites f ON g.gid = f.gid,
-				 jsonb_each(g.tags) AS t(ns, vals),
-				 jsonb_array_elements_text(vals) AS tag_value
-			WHERE ns IN ('artist', 'group', 'character', 'parody')
-			GROUP BY ns, tag_value
-		),
-		doc_freq AS (
-			SELECT ns, tag_value, COUNT(DISTINCT g.gid)::REAL AS df
-			FROM eh_galleries g,
-				 jsonb_each(g.tags) AS t(ns, vals),
-				 jsonb_array_elements_text(vals) AS tag_value
-			WHERE g.is_active = TRUE
-			  AND ns IN ('artist', 'group', 'character', 'parody')
-			GROUP BY ns, tag_value
-		),
-		total AS (
-			SELECT COUNT(*)::REAL AS n FROM eh_galleries WHERE is_active = TRUE
-		)
-		INSERT INTO preference_tags (namespace, tag, weight, count)
-		SELECT f.ns, f.tag_value,
-			   (1.0 + LN(f.tf)) * LN(total.n / GREATEST(d.df, 1)),
-			   f.tf
-		FROM fav_tf f
-		JOIN doc_freq d ON d.ns = f.ns AND d.tag_value = f.tag_value
-		CROSS JOIN total
-	`)
-	if err != nil {
-		return 0, err
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return 0, err
-	}
-	return int(tag.RowsAffected()), nil
-}
-
-func (d *DB) ScoreRecommendedBatch(ctx context.Context, cursorGID *int64, batchSize int) ([]int64, *int64, error) {
-	tx, err := d.pool.Begin(ctx)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer tx.Rollback(ctx)
-
-	// Check preference_tags has data
-	var exists bool
-	err = tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM preference_tags LIMIT 1)").Scan(&exists)
-	if err != nil {
-		return nil, nil, err
-	}
-	if !exists {
-		return nil, nil, nil
-	}
-
-	// Fetch batch of GIDs
-	var gidRows pgx.Rows
-	if cursorGID == nil {
-		gidRows, err = tx.Query(ctx,
-			"SELECT gid FROM eh_galleries WHERE is_active = TRUE ORDER BY gid DESC LIMIT $1",
-			batchSize)
-	} else {
-		gidRows, err = tx.Query(ctx,
-			"SELECT gid FROM eh_galleries WHERE is_active = TRUE AND gid < $1 ORDER BY gid DESC LIMIT $2",
-			*cursorGID, batchSize)
-	}
-	if err != nil {
-		return nil, nil, err
-	}
-
-	var gids []int64
-	for gidRows.Next() {
-		var gid int64
-		if err := gidRows.Scan(&gid); err != nil {
-			gidRows.Close()
-			return nil, nil, err
-		}
-		gids = append(gids, gid)
-	}
-	gidRows.Close()
-
-	if len(gids) == 0 {
-		return nil, nil, nil
-	}
-
-	// Score and upsert
-	_, err = tx.Exec(ctx, `
-		INSERT INTO recommended_cache (gid, rec_score)
-		SELECT g.gid, SUM(p.weight)
-		FROM preference_tags p
-		JOIN eh_galleries g ON g.tags @> jsonb_build_object(p.namespace, jsonb_build_array(p.tag))
-		WHERE g.gid = ANY($1)
-		GROUP BY g.gid
-		HAVING SUM(p.weight) >= 20
-		ON CONFLICT (gid) DO UPDATE SET rec_score = EXCLUDED.rec_score
-	`, gids)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// Cleanup below threshold
-	_, err = tx.Exec(ctx, `
-		DELETE FROM recommended_cache
-		WHERE gid = ANY($1)
-		  AND gid NOT IN (
-			  SELECT g.gid
-			  FROM preference_tags p
-			  JOIN eh_galleries g ON g.tags @> jsonb_build_object(p.namespace, jsonb_build_array(p.tag))
-			  WHERE g.gid = ANY($1)
-			  GROUP BY g.gid
-			  HAVING SUM(p.weight) >= 20
-		  )
-	`, gids)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return nil, nil, err
-	}
-
-	var nextCursor *int64
-	if len(gids) == batchSize {
-		last := gids[len(gids)-1]
-		nextCursor = &last
-	}
-	return gids, nextCursor, nil
-}
-
-// PreferenceTag represents a row from preference_tags.
-type PreferenceTag struct {
-	Namespace string
-	Tag       string
-	Weight    float64
-}
-
-// ListPreferenceTags returns all preference tags.
-func (d *DB) ListPreferenceTags(ctx context.Context) ([]PreferenceTag, error) {
-	rows, err := d.pool.Query(ctx, "SELECT namespace, tag, weight FROM preference_tags")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var tags []PreferenceTag
-	for rows.Next() {
-		var t PreferenceTag
-		if err := rows.Scan(&t.Namespace, &t.Tag, &t.Weight); err != nil {
-			return nil, err
-		}
-		tags = append(tags, t)
-	}
-	return tags, rows.Err()
-}
-
-// FindGIDsByTag returns all active gallery GIDs that contain the given tag.
-// Uses the GIN index on tags column.
-func (d *DB) FindGIDsByTag(ctx context.Context, namespace, tag string) ([]int64, error) {
-	jsonPattern := fmt.Sprintf(`{"%s": ["%s"]}`, namespace, tag)
-	rows, err := d.pool.Query(ctx,
-		"SELECT gid FROM eh_galleries WHERE is_active = TRUE AND tags @> $1::jsonb",
-		jsonPattern)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var gids []int64
-	for rows.Next() {
-		var gid int64
-		if err := rows.Scan(&gid); err != nil {
-			return nil, err
-		}
-		gids = append(gids, gid)
-	}
-	return gids, rows.Err()
-}
-
-// ReplaceRecommendedCache replaces the entire recommended_cache with new scores.
-func (d *DB) ReplaceRecommendedCache(ctx context.Context, scores map[int64]float64, threshold float64) (int, error) {
-	tx, err := d.pool.Begin(ctx)
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback(ctx)
-
-	_, err = tx.Exec(ctx, "TRUNCATE recommended_cache")
-	if err != nil {
-		return 0, err
-	}
-
-	if len(scores) == 0 {
-		return 0, tx.Commit(ctx)
-	}
-
-	// Batch insert
-	var values []string
-	var args []any
-	idx := 1
-	for gid, score := range scores {
-		if score < threshold {
-			continue
-		}
-		values = append(values, fmt.Sprintf("($%d,$%d)", idx, idx+1))
-		args = append(args, gid, score)
-		idx += 2
-
-		// Flush in batches of 1000
-		if len(values) >= 1000 {
-			_, err = tx.Exec(ctx,
-				"INSERT INTO recommended_cache (gid, rec_score) VALUES "+strings.Join(values, ","),
-				args...)
-			if err != nil {
-				return 0, err
-			}
-			values = values[:0]
-			args = args[:0]
-			idx = 1
-		}
-	}
-
-	inserted := 0
-	if len(values) > 0 {
-		tag, err := tx.Exec(ctx,
-			"INSERT INTO recommended_cache (gid, rec_score) VALUES "+strings.Join(values, ","),
-			args...)
-		if err != nil {
-			return 0, err
-		}
-		inserted = int(tag.RowsAffected())
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return 0, err
-	}
-	return inserted, nil
 }
 
 func (d *DB) GalleryGroupFullRebuild(ctx context.Context) (int, error) {

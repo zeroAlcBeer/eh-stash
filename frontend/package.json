@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "packageManager": "pnpm@10.15.0",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -28,5 +29,11 @@
     "eslint-plugin-react-refresh": "^0.4.6",
     "tailwindcss": "^4.2.1",
     "vite": "^5.2.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

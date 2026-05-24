@@ -18,7 +18,8 @@ import {
   deleteTask,
   getTasks,
   getThumbStats,
-  getScoreDistribution,
+  getSimilarityDistribution,
+  getEmbeddingsStatus,
   updateThreshold,
   startTask,
   stopTask,
@@ -520,35 +521,39 @@ function DeleteTaskModal({ open, task, busy, onClose, onConfirm }) {
   );
 }
 
-// ─── Score Distribution Panel ─────────────────────────────────────────────────
+// ─── Similarity Distribution Panel ────────────────────────────────────────────
 
-function ScoreDistributionPanel() {
+function SimilarityDistributionPanel() {
   const queryClient = useQueryClient();
   const { data, isLoading } = useQuery({
-    queryKey: ['admin', 'scoreDistribution'],
-    queryFn: getScoreDistribution,
+    queryKey: ['admin', 'similarityDistribution'],
+    queryFn: getSimilarityDistribution,
+  });
+  const { data: statusData } = useQuery({
+    queryKey: ['admin', 'embeddingsStatus'],
+    queryFn: getEmbeddingsStatus,
+    refetchInterval: 5000,
   });
 
   const [localThreshold, setLocalThreshold] = useState(null);
   const [saving, setSaving] = useState(false);
 
-  const dist = data || { buckets: [], total: 0, threshold: 20, count_above: 0 };
+  const dist = data || { buckets: [], total: 0, threshold: 0.3, count_above: 0 };
   const threshold = localThreshold ?? dist.threshold;
 
-  // Reset local when server data arrives
   useEffect(() => {
     if (data) setLocalThreshold(null);
   }, [data?.threshold]);
 
   const maxCount = Math.max(...dist.buckets.map((b) => b.count), 1);
 
-  // Compute count_above for the local threshold
   const countAbove = dist.buckets.reduce((sum, b) => {
-    if (b.max > threshold) return sum + b.count;
-    if (b.min <= threshold && b.max > threshold) return sum + Math.round(b.count * (b.max - threshold) / (b.max - b.min));
+    if (b.min >= threshold) return sum + b.count;
+    if (b.min < threshold && b.max > threshold) {
+      return sum + Math.round(b.count * (b.max - threshold) / (b.max - b.min));
+    }
     return sum;
   }, 0);
-  // Use server count_above when unchanged, local estimate when dragging
   const displayCount = localThreshold == null ? dist.count_above : countAbove;
 
   const handleSave = async () => {
@@ -556,10 +561,16 @@ function ScoreDistributionPanel() {
     setSaving(true);
     try {
       await updateThreshold(localThreshold);
-      queryClient.invalidateQueries({ queryKey: ['admin', 'scoreDistribution'] });
+      queryClient.invalidateQueries({ queryKey: ['admin', 'similarityDistribution'] });
     } finally {
       setSaving(false);
     }
+  };
+
+  const status = statusData || {
+    vocab_size: 0, dim_count: 0, total_galleries: 0,
+    embedded_count: 0, pending_count: 0,
+    profile_liked_count: 0, profile_ready: false,
   };
 
   if (isLoading) {
@@ -570,112 +581,129 @@ function ScoreDistributionPanel() {
     );
   }
 
-  if (!dist.buckets.length) {
-    return (
-      <div className="rounded-xl border border-white/10 bg-white/5 p-6 text-center text-gray-500 text-sm">
-        暂无推荐数据，请先运行 Favorites Sync 并等待评分完成
-      </div>
-    );
-  }
-
-  const scoreMin = dist.buckets[0]?.min ?? 0;
-  const scoreMax = dist.buckets[dist.buckets.length - 1]?.max ?? 100;
-
   return (
     <div className="rounded-xl border border-white/10 bg-white/5 backdrop-blur-sm p-5 shadow-sm space-y-4">
-      {/* Stats row */}
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="flex items-center gap-4 text-sm">
-          <span className="text-gray-400">
-            推荐总数: <span className="text-white font-semibold">{dist.total.toLocaleString()}</span>
-          </span>
-          <span className="text-gray-400">
-            阈值 ≥ {threshold}: <span className="text-blue-400 font-semibold">{displayCount.toLocaleString()}</span>
-          </span>
-        </div>
-        {localThreshold != null && localThreshold !== dist.threshold && (
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium transition-all disabled:opacity-50 flex items-center gap-1.5"
-          >
-            {saving && <Loader2 size={12} className="animate-spin" />}
-            保存阈值 {localThreshold}
-          </button>
+      {/* Embeddings status row */}
+      <div className="flex items-center gap-4 text-xs text-gray-400 flex-wrap">
+        <span>词表: <span className="text-white font-mono">{status.vocab_size.toLocaleString()}</span> / dim {status.dim_count.toLocaleString()}</span>
+        <span>已嵌入: <span className="text-white font-mono">{status.embedded_count.toLocaleString()}</span> / {status.total_galleries.toLocaleString()}</span>
+        {status.pending_count > 0 && (
+          <span className="text-amber-400">待处理: {status.pending_count.toLocaleString()}</span>
         )}
+        <span>偏好画廊: <span className="text-white font-mono">{status.profile_liked_count.toLocaleString()}</span></span>
+        <span className={status.profile_ready ? 'text-emerald-400' : 'text-rose-400'}>
+          {status.profile_ready ? 'profile ready' : 'profile not ready'}
+        </span>
       </div>
 
-      {/* Histogram */}
-      <div className="relative" aria-label="评分分布直方图">
-        <div className="flex items-end gap-px h-32">
-          {dist.buckets.map((b, i) => {
-            const pct = b.count > 0 ? Math.log(b.count + 1) / Math.log(maxCount + 1) : 0;
-            const aboveThreshold = b.min >= threshold;
-            const partial = b.min < threshold && b.max > threshold;
-            return (
-              <div
-                key={i}
-                className="flex-1 relative group"
-                style={{ height: '100%', display: 'flex', alignItems: 'flex-end' }}
-                title={`${b.min.toFixed(1)} – ${b.max.toFixed(1)}: ${b.count}`}
+      {!dist.buckets.length ? (
+        <div className="text-center text-gray-500 text-sm py-6">
+          暂无相似度数据，请先运行 Favorites Sync，等待词表构建和向量化完成
+        </div>
+      ) : (
+        <>
+          {/* Stats row */}
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-4 text-sm">
+              <span className="text-gray-400">
+                候选总数: <span className="text-white font-semibold">{dist.total.toLocaleString()}</span>
+              </span>
+              <span className="text-gray-400">
+                相似度 ≥ {threshold.toFixed(2)}: <span className="text-blue-400 font-semibold">{displayCount.toLocaleString()}</span>
+              </span>
+            </div>
+            {localThreshold != null && localThreshold !== dist.threshold && (
+              <button
+                onClick={handleSave}
+                disabled={saving}
+                className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium transition-all disabled:opacity-50 flex items-center gap-1.5"
               >
-                <div
-                  className={`w-full rounded-t-sm transition-colors ${aboveThreshold ? 'bg-blue-500/70' : partial ? 'bg-blue-500/40' : 'bg-white/15'
-                    }`}
-                  style={{ height: `${Math.max(pct * 100, 0.5)}%` }}
-                />
-                {/* Tooltip */}
-                <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 hidden group-hover:block z-10
-                                px-2 py-1 rounded bg-zinc-800 border border-white/10 text-xs text-gray-300 whitespace-nowrap shadow-lg">
-                  {b.min.toFixed(1)} – {b.max.toFixed(1)}: {b.count}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-        {/* Threshold line */}
-        {scoreMax > scoreMin && (
-          <div
-            className="absolute top-0 bottom-0 w-px bg-red-500/80 pointer-events-none"
-            style={{ left: `${((threshold - scoreMin) / (scoreMax - scoreMin)) * 100}%` }}
-          >
-            <span className="absolute -top-5 left-1/2 -translate-x-1/2 text-xs text-red-400 font-mono whitespace-nowrap">
-              {threshold}
-            </span>
+                {saving && <Loader2 size={12} className="animate-spin" />}
+                保存阈值 {localThreshold.toFixed(2)}
+              </button>
+            )}
           </div>
-        )}
-      </div>
 
-      {/* X-axis labels */}
-      <div className="flex justify-between text-xs text-gray-500 font-mono -mt-1">
-        <span>{scoreMin.toFixed(0)}</span>
-        <span>{scoreMax.toFixed(0)}</span>
-      </div>
+          {/* Histogram */}
+          <div className="relative" aria-label="相似度分布直方图">
+            <div className="flex items-end gap-px h-32">
+              {dist.buckets.map((b, i) => {
+                const pct = b.count > 0 ? Math.log(b.count + 1) / Math.log(maxCount + 1) : 0;
+                const aboveThreshold = b.min >= threshold;
+                const partial = b.min < threshold && b.max > threshold;
+                return (
+                  <div
+                    key={i}
+                    className="flex-1 relative group"
+                    style={{ height: '100%', display: 'flex', alignItems: 'flex-end' }}
+                    title={`${b.min.toFixed(3)} – ${b.max.toFixed(3)}: ${b.count}`}
+                  >
+                    <div
+                      className={`w-full rounded-t-sm transition-colors ${aboveThreshold ? 'bg-blue-500/70' : partial ? 'bg-blue-500/40' : 'bg-white/15'
+                        }`}
+                      style={{ height: `${Math.max(pct * 100, 0.5)}%` }}
+                    />
+                    <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 hidden group-hover:block z-10
+                                    px-2 py-1 rounded bg-zinc-800 border border-white/10 text-xs text-gray-300 whitespace-nowrap shadow-lg">
+                      {b.min.toFixed(3)} – {b.max.toFixed(3)}: {b.count}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {/* Threshold line — positioned in [bucketMin, bucketMax] range */}
+            {dist.buckets.length > 1 && (() => {
+              const scoreMin = dist.buckets[0].min;
+              const scoreMax = dist.buckets[dist.buckets.length - 1].max;
+              if (scoreMax <= scoreMin) return null;
+              const pos = ((threshold - scoreMin) / (scoreMax - scoreMin)) * 100;
+              if (pos < 0 || pos > 100) return null;
+              return (
+                <div
+                  className="absolute top-0 bottom-0 w-px bg-red-500/80 pointer-events-none"
+                  style={{ left: `${pos}%` }}
+                >
+                  <span className="absolute -top-5 left-1/2 -translate-x-1/2 text-xs text-red-400 font-mono whitespace-nowrap">
+                    {threshold.toFixed(2)}
+                  </span>
+                </div>
+              );
+            })()}
+          </div>
 
-      {/* Slider */}
-      <div className="flex items-center gap-3">
-        <label htmlFor="threshold-slider" className="text-xs text-gray-400 shrink-0">阈值</label>
-        <input
-          id="threshold-slider"
-          type="range"
-          min={scoreMin}
-          max={scoreMax}
-          step={0.5}
-          value={threshold}
-          onChange={(e) => setLocalThreshold(Number(e.target.value))}
-          className="flex-1 h-1.5 accent-blue-500 cursor-pointer"
-        />
-        <input
-          type="number"
-          min={0}
-          step={0.5}
-          value={threshold}
-          onChange={(e) => setLocalThreshold(Number(e.target.value))}
-          aria-label="阈值数值"
-          className="w-20 px-2 py-1 rounded-lg bg-white/5 border border-white/10 text-white text-xs text-center
-                     focus:outline-none focus:ring-2 focus:ring-blue-500/40 transition-all"
-        />
-      </div>
+          {/* X-axis labels */}
+          <div className="flex justify-between text-xs text-gray-500 font-mono -mt-1">
+            <span>{dist.buckets[0]?.min.toFixed(2) ?? '0.00'}</span>
+            <span>{dist.buckets[dist.buckets.length - 1]?.max.toFixed(2) ?? '1.00'}</span>
+          </div>
+
+          {/* Slider */}
+          <div className="flex items-center gap-3">
+            <label htmlFor="threshold-slider" className="text-xs text-gray-400 shrink-0">阈值</label>
+            <input
+              id="threshold-slider"
+              type="range"
+              min={0}
+              max={1}
+              step={0.01}
+              value={threshold}
+              onChange={(e) => setLocalThreshold(Number(e.target.value))}
+              className="flex-1 h-1.5 accent-blue-500 cursor-pointer"
+            />
+            <input
+              type="number"
+              min={0}
+              max={1}
+              step={0.01}
+              value={threshold}
+              onChange={(e) => setLocalThreshold(Number(e.target.value))}
+              aria-label="阈值数值"
+              className="w-20 px-2 py-1 rounded-lg bg-white/5 border border-white/10 text-white text-xs text-center
+                         focus:outline-none focus:ring-2 focus:ring-blue-500/40 transition-all"
+            />
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -852,7 +880,7 @@ export default function AdminPage() {
       {/* Recommended Score Distribution */}
       <div>
         <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-3">Recommended Score Distribution</p>
-        <ScoreDistributionPanel />
+        <SimilarityDistributionPanel />
       </div>
 
       {/* Sync Tasks */}

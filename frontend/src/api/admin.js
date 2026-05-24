@@ -56,7 +56,7 @@ export function getThumbStats() {
   return request('/thumb-queue/stats');
 }
 
-export function getScoreDistribution() {
+export function getSimilarityDistribution() {
   return request('/recommended/distribution');
 }
 
@@ -66,4 +66,8 @@ export function updateThreshold(threshold) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ threshold }),
   });
+}
+
+export function getEmbeddingsStatus() {
+  return request('/recommended/embeddings-status');
 }

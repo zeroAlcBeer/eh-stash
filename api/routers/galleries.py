@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query, HTTPException
 from typing import Optional, List
 from db import get_db
 from models import Gallery, GalleryList
-from routers import admin as _admin_mod
+from routers.admin import get_similarity_threshold
 import math
 import os
 import json
@@ -81,11 +81,13 @@ def _rows_to_galleries(db, rows):
 
 
 def _get_recommended(*, db, category, language, min_rating, min_fav, tag, is_favorited, page, page_size, offset):
-    """Recommended: query pre-computed recommended_cache, order by gid DESC."""
+    """Recommended: query precomputed similarity in recommended_cache, ORDER BY index."""
     where_parts, params = _build_where(category, language, min_rating, min_fav, tag)
 
-    where_parts.append("c.rec_score >= %s")
-    params.append(_admin_mod._recommend_threshold)
+    threshold = get_similarity_threshold(db)
+    where_parts.append("rc.similarity >= %s")
+    params.append(threshold)
+    where_parts.append("g.is_active = TRUE")
 
     if is_favorited is True:
         where_parts.append("(f.gid IS NOT NULL OR gf.group_id IS NOT NULL)")
@@ -95,13 +97,14 @@ def _get_recommended(*, db, category, language, min_rating, min_fav, tag, is_fav
     where_sql = " AND ".join(where_parts)
 
     query = f"""
-        SELECT g.*, c.rec_score,
+        SELECT g.*,
+               rc.similarity,
                (f.gid IS NOT NULL OR gf.group_id IS NOT NULL) AS is_favorited,
                f.favorited_at,
                ggm.group_id,
                COALESCE(gc.cnt, 0) AS group_count
-        FROM recommended_cache c
-        JOIN eh_galleries g ON g.gid = c.gid
+        FROM recommended_cache rc
+        JOIN eh_galleries g ON g.gid = rc.gid
         LEFT JOIN user_favorites f ON g.gid = f.gid
         LEFT JOIN gallery_group_members ggm ON g.gid = ggm.gid
         LEFT JOIN (
@@ -115,7 +118,7 @@ def _get_recommended(*, db, category, language, min_rating, min_fav, tag, is_fav
             JOIN user_favorites f2 ON f2.gid = ggm2.gid
         ) gf ON gf.group_id = ggm.group_id
         WHERE {where_sql}
-        ORDER BY g.gid DESC
+        ORDER BY rc.similarity DESC, g.gid DESC
     """
 
     count_query = f"SELECT COUNT(*) FROM ({query}) AS sub"

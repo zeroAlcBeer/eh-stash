@@ -41,7 +41,7 @@ func NormalizeBaseTitle(titleJPN, title string) string {
 
 // FavSignals holds channels needed by the favorites task.
 type FavSignals struct {
-	ScorerReset    chan struct{}
+	ProfileUpdate  chan struct{}
 	GrouperTrigger chan struct{}
 }
 

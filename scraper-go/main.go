@@ -72,7 +72,7 @@ func main() {
 
 	// Signal channels for workers
 	signals := &scheduler.Signals{
-		ScorerReset:    make(chan struct{}, 1),
+		ProfileUpdate:  make(chan struct{}, 1),
 		GrouperTrigger: make(chan struct{}, 1),
 		ThumbNotify:    make(chan struct{}, 1),
 	}

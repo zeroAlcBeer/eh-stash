@@ -22,11 +22,6 @@ export const fetchStats = async () => {
   return data;
 };
 
-export const fetchPreferences = async () => {
-  const { data } = await api.get('/preferences');
-  return data;
-};
-
 export const fetchGalleryGroup = async (groupId) => {
   const { data } = await api.get(`/galleries/group/${groupId}`);
   return data;

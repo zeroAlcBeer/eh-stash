@@ -28,7 +28,7 @@ class Gallery(BaseModel):
     is_active: bool = True
     is_favorited: bool = False
     favorited_at: Optional[datetime] = None
-    rec_score: Optional[float] = None
+    similarity: Optional[float] = None
     group_id: Optional[int] = None
     group_count: Optional[int] = None
 
@@ -122,15 +122,18 @@ class ThumbQueueStats(BaseModel):
     waiting: int
 
 
-class PreferenceTag(BaseModel):
-    namespace: str
-    tag: str
-    weight: float
-    count: float
-
-
-class ScoreDistribution(BaseModel):
+class SimilarityDistribution(BaseModel):
     buckets: List[Dict[str, Any]]  # [{min, max, count}, ...]
     total: int
     threshold: float
     count_above: int
+
+
+class EmbeddingsStatus(BaseModel):
+    vocab_size: int
+    dim_count: int
+    total_galleries: int
+    embedded_count: int
+    pending_count: int
+    profile_liked_count: int
+    profile_ready: bool
