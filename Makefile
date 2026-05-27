@@ -12,12 +12,15 @@ REGISTRY_URL ?= 192.168.0.110:5000
 API_SERVICE     := api
 SCRAPER_SERVICE := scraper
 FRONTEND_SERVICE := frontend
+PI_SYNC_SERVICE := pi-sync
 # postgres uses official image — NAS pulls it directly, no build/push needed
+# pi-sync is built standalone (not in docker-compose.yaml — Pi-only service)
 
 # Registry image names
 API_IMAGE      := eh-stash-api
 SCRAPER_IMAGE  := eh-stash-scraper
 FRONTEND_IMAGE := eh-stash-frontend
+PI_SYNC_IMAGE  := eh-stash-pi-sync
 
 # Tag
 TAG ?= latest
@@ -29,15 +32,18 @@ PROJECT_NAME := $(shell basename $(CURDIR))
 LOCAL_API_IMAGE      := $(PROJECT_NAME)-$(API_SERVICE)
 LOCAL_SCRAPER_IMAGE  := $(PROJECT_NAME)-$(SCRAPER_SERVICE)
 LOCAL_FRONTEND_IMAGE := $(PROJECT_NAME)-$(FRONTEND_SERVICE)
+LOCAL_PI_SYNC_IMAGE  := $(PROJECT_NAME)-$(PI_SYNC_SERVICE)
 
 
 # --- Local Development ---
 .PHONY: build up down restart logs logs-api logs-scraper logs-frontend dev-rebuild
 
-# Build all custom images (api, scraper, frontend)
+# Build all custom images (api, scraper, frontend, pi-sync)
 build:
 	@echo "--> Building Docker images..."
 	docker-compose build
+	@echo "--> Building pi-sync image (standalone)..."
+	docker build -t $(LOCAL_PI_SYNC_IMAGE):latest ./pi-sync
 
 # Start all services in detached mode
 up:
@@ -82,6 +88,7 @@ tag: build
 	docker tag $(LOCAL_API_IMAGE):latest      $(REGISTRY_URL)/$(API_IMAGE):$(TAG)
 	docker tag $(LOCAL_SCRAPER_IMAGE):latest  $(REGISTRY_URL)/$(SCRAPER_IMAGE):$(TAG)
 	docker tag $(LOCAL_FRONTEND_IMAGE):latest $(REGISTRY_URL)/$(FRONTEND_IMAGE):$(TAG)
+	docker tag $(LOCAL_PI_SYNC_IMAGE):latest  $(REGISTRY_URL)/$(PI_SYNC_IMAGE):$(TAG)
 
 # Push tagged images to the private registry
 push:
@@ -89,10 +96,11 @@ push:
 	docker push $(REGISTRY_URL)/$(API_IMAGE):$(TAG)
 	docker push $(REGISTRY_URL)/$(SCRAPER_IMAGE):$(TAG)
 	docker push $(REGISTRY_URL)/$(FRONTEND_IMAGE):$(TAG)
+	docker push $(REGISTRY_URL)/$(PI_SYNC_IMAGE):$(TAG)
 
 # Full release: build → tag → push
 release: tag push
-	@echo "--> Release complete: api, scraper, frontend pushed to $(REGISTRY_URL)."
+	@echo "--> Release complete: api, scraper, frontend, pi-sync pushed to $(REGISTRY_URL)."
 
 
 # --- Portainer Remote Deployment ---
@@ -160,7 +168,7 @@ help:
 	@echo "Usage: make [target]"
 	@echo ""
 	@echo "Local Development:"
-	@echo "  build                Build Docker images (api, scraper, frontend)"
+	@echo "  build                Build Docker images (api, scraper, frontend, pi-sync)"
 	@echo "  up                   Start all services in detached mode"
 	@echo "  down                 Stop and remove containers (data preserved)"
 	@echo "  restart              down + up"

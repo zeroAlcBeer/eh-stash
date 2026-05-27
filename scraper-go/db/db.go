@@ -183,6 +183,21 @@ func (d *DB) UpsertGalleriesBulk(ctx context.Context, rows []GalleryRow) (int, e
 		}
 	}
 
+	// Outbox for pi-sync. PK on gid coalesces repeated upserts; pi-sync's
+	// optimistic delete uses enqueued_at to detect concurrent updates.
+	gids := make([]int64, len(rows))
+	for i, r := range rows {
+		gids[i] = r.GID
+	}
+	_, err = tx.Exec(ctx,
+		`INSERT INTO sync_outbox (gid, enqueued_at)
+		 SELECT unnest($1::bigint[]), NOW()
+		 ON CONFLICT (gid) DO UPDATE SET enqueued_at = NOW()`,
+		gids)
+	if err != nil {
+		return 0, fmt.Errorf("upsert sync_outbox: %w", err)
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return 0, err
 	}

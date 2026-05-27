@@ -73,3 +73,23 @@ services:
     ports:
       - "4173:4173"   # 宿主 4173 → 容器内 vite preview 4173
     restart: unless-stopped
+
+  pi-sync:
+    image: ${REGISTRY_URL:-192.168.0.110:5000}/eh-stash-pi-sync:${TAG:-latest}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PI_DSN: ${DATABASE_URL}
+      NEON_DSN: ${NEON_DSN}
+      R2_ENDPOINT: ${R2_ENDPOINT}
+      R2_BUCKET: ${R2_BUCKET}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY}
+      THUMB_DIR: /data/thumbs
+      SYNC_CADENCE_SEC: ${SYNC_CADENCE_SEC:-300}
+      SYNC_CHUNK_ROT: ${SYNC_CHUNK_ROT:-5000}
+      SYNC_OUTBOX_BATCH: ${SYNC_OUTBOX_BATCH:-500}
+    volumes:
+      - /opt/eh-stash/thumbs:/data/thumbs:ro
+    restart: unless-stopped
