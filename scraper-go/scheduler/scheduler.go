@@ -63,12 +63,28 @@ func (s *Scheduler) Run(ctx context.Context) {
 	workerCtx, workerCancel := context.WithCancel(ctx)
 	defer workerCancel()
 
-	done := make(chan struct{}, 3)
+	// Reset any rows stuck in 'processing' from a previous run before any worker
+	// starts claiming. Doing this once here (instead of inside each worker) avoids
+	// N identical resets when running a worker pool.
+	if n, err := s.db.ResetStaleThumbProcessing(ctx); err != nil {
+		slog.Error("[THUMB] reset stale processing failed", "error", err)
+	} else if n > 0 {
+		slog.Info("[THUMB] reset stale processing items", "count", n)
+	}
 
-	go func() {
-		worker.RunThumbWorker(workerCtx, s.db, s.client, s.cfg, s.thumbLimiter, s.signals.ThumbNotify)
-		done <- struct{}{}
-	}()
+	thumbWorkers := s.cfg.ThumbWorkers
+	if thumbWorkers < 1 {
+		thumbWorkers = 1
+	}
+	done := make(chan struct{}, thumbWorkers+2)
+
+	for i := 0; i < thumbWorkers; i++ {
+		workerID := i + 1
+		go func() {
+			worker.RunThumbWorker(workerCtx, workerID, s.db, s.client, s.cfg, s.thumbLimiter, s.signals.ThumbNotify)
+			done <- struct{}{}
+		}()
+	}
 	go func() {
 		worker.RunEmbeddings(workerCtx, s.db, s.signals.ProfileUpdate)
 		done <- struct{}{}

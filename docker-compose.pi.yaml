@@ -43,6 +43,7 @@ services:
       EX_BASE_URL: ${EX_BASE_URL:-https://exhentai.org}
       RATE_INTERVAL: ${RATE_INTERVAL:-1.0}
       THUMB_RATE_INTERVAL: ${THUMB_RATE_INTERVAL:-0.5}
+      THUMB_WORKERS: ${THUMB_WORKERS:-1}
       THUMB_DIR: /data/thumbs
       PROXY_URL: ${PROXY_URL:-}
     ports:

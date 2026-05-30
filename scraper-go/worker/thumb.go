@@ -21,34 +21,29 @@ const (
 
 // RunThumbWorker continuously downloads thumbnails from the queue.
 // Signal-driven: blocks on notifyCh when queue is empty.
+// Safe to run multiple instances concurrently — claim uses FOR UPDATE SKIP LOCKED.
+// workerID is logged for traceability across parallel workers.
 func RunThumbWorker(
 	ctx context.Context,
+	workerID int,
 	database *db.DB,
 	httpClient *client.Client,
 	cfg *config.Config,
 	limiter *ratelimit.SimpleLimiter,
 	notifyCh <-chan struct{},
 ) {
-	slog.Info("[THUMB] thumb worker started")
+	slog.Info("[THUMB] thumb worker started", "worker_id", workerID)
 
-	// Ensure thumb directory exists
+	// Ensure thumb directory exists (each worker idempotently — no harm)
 	if err := os.MkdirAll(cfg.ThumbDir, 0755); err != nil {
-		slog.Error("[THUMB] create thumb dir failed", "error", err)
+		slog.Error("[THUMB] create thumb dir failed", "worker_id", workerID, "error", err)
 		return
-	}
-
-	// Reset stale processing items
-	count, err := database.ResetStaleThumbProcessing(ctx)
-	if err != nil {
-		slog.Error("[THUMB] reset stale processing failed", "error", err)
-	} else if count > 0 {
-		slog.Info("[THUMB] reset stale processing items", "count", count)
 	}
 
 	for {
 		select {
 		case <-ctx.Done():
-			slog.Info("[THUMB] worker stopped")
+			slog.Info("[THUMB] worker stopped", "worker_id", workerID)
 			return
 		default:
 		}
@@ -59,7 +54,7 @@ func RunThumbWorker(
 
 		item, err := database.ClaimNextThumbQueueItem(ctx)
 		if err != nil {
-			slog.Error("[THUMB] claim item failed", "error", err)
+			slog.Error("[THUMB] claim item failed", "worker_id", workerID, "error", err)
 			sleep(ctx, 10*time.Second)
 			continue
 		}
@@ -82,7 +77,7 @@ func RunThumbWorker(
 		data, statusCode, err := httpClient.FetchThumb(fetchCtx, item.ThumbURL)
 		cancel()
 		if err != nil {
-			slog.Warn(fmt.Sprintf("[THUMB] gid=%d download failed", item.GID), "error", err)
+			slog.Warn(fmt.Sprintf("[THUMB] gid=%d download failed", item.GID), "worker_id", workerID, "error", err)
 			database.MarkThumbFailed(ctx, item.ID, thumbMaxRetries)
 			continue
 		}
@@ -91,18 +86,18 @@ func RunThumbWorker(
 		case statusCode == 200:
 			path := filepath.Join(cfg.ThumbDir, fmt.Sprintf("%d", item.GID))
 			if err := os.WriteFile(path, data, 0644); err != nil {
-				slog.Error(fmt.Sprintf("[THUMB] gid=%d write failed", item.GID), "error", err)
+				slog.Error(fmt.Sprintf("[THUMB] gid=%d write failed", item.GID), "worker_id", workerID, "error", err)
 				database.MarkThumbFailed(ctx, item.ID, thumbMaxRetries)
 				continue
 			}
 			database.MarkThumbDone(ctx, item.ID)
 
 		case statusCode == 404:
-			slog.Warn(fmt.Sprintf("[THUMB] gid=%d 404 permanent fail", item.GID))
+			slog.Warn(fmt.Sprintf("[THUMB] gid=%d 404 permanent fail", item.GID), "worker_id", workerID)
 			database.MarkThumbPermanentFailed(ctx, item.ID)
 
 		default:
-			slog.Warn(fmt.Sprintf("[THUMB] gid=%d HTTP %d", item.GID, statusCode))
+			slog.Warn(fmt.Sprintf("[THUMB] gid=%d HTTP %d", item.GID, statusCode), "worker_id", workerID)
 			database.MarkThumbFailed(ctx, item.ID, thumbMaxRetries)
 		}
 	}

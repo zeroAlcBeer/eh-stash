@@ -18,6 +18,7 @@ type Config struct {
 	ThumbDir          string
 	RateInterval      float64
 	ThumbRateInterval float64
+	ThumbWorkers      int
 	BanCooldown       float64
 	Headers           http.Header
 }
@@ -45,6 +46,7 @@ func Load() (*Config, error) {
 		ThumbDir:          getEnv("THUMB_DIR", "/data/thumbs"),
 		RateInterval:      getEnvFloat("RATE_INTERVAL", 5.0),
 		ThumbRateInterval: getEnvFloat("THUMB_RATE_INTERVAL", 0.5),
+		ThumbWorkers:      getEnvInt("THUMB_WORKERS", 1),
 		BanCooldown:       getEnvFloat("BAN_COOLDOWN", 60.0),
 		Headers: http.Header{
 			"User-Agent": {
@@ -92,4 +94,16 @@ func getEnvFloat(key string, fallback float64) float64 {
 		return fallback
 	}
 	return f
+}
+
+func getEnvInt(key string, fallback int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 {
+		return fallback
+	}
+	return n
 }
