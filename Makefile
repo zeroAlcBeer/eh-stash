@@ -25,6 +25,9 @@ PI_SYNC_IMAGE  := eh-stash-pi-sync
 # Tag
 TAG ?= latest
 
+# Immutable tag derived from git HEAD (use via `make release-sha`)
+GIT_SHA := $(shell git rev-parse --short=12 HEAD 2>/dev/null)
+
 # Project name (= directory name, used by docker-compose to prefix local image names)
 PROJECT_NAME := $(shell basename $(CURDIR))
 
@@ -80,9 +83,9 @@ logs-frontend:
 
 
 # --- Deployment to NAS Registry ---
-.PHONY: tag push release
+.PHONY: tag push release-sha image-sha verify-remote diagnose
 
-# Tag freshly built images for the private registry
+# Tag freshly built images for the private registry (uses TAG variable, defaults to :latest)
 tag: build
 	@echo "--> Tagging images for registry at $(REGISTRY_URL)..."
 	docker tag $(LOCAL_API_IMAGE):latest      $(REGISTRY_URL)/$(API_IMAGE):$(TAG)
@@ -90,7 +93,7 @@ tag: build
 	docker tag $(LOCAL_FRONTEND_IMAGE):latest $(REGISTRY_URL)/$(FRONTEND_IMAGE):$(TAG)
 	docker tag $(LOCAL_PI_SYNC_IMAGE):latest  $(REGISTRY_URL)/$(PI_SYNC_IMAGE):$(TAG)
 
-# Push tagged images to the private registry
+# Push tagged images to the private registry (uses TAG variable)
 push:
 	@echo "--> Pushing images to registry at $(REGISTRY_URL)..."
 	docker push $(REGISTRY_URL)/$(API_IMAGE):$(TAG)
@@ -98,67 +101,72 @@ push:
 	docker push $(REGISTRY_URL)/$(FRONTEND_IMAGE):$(TAG)
 	docker push $(REGISTRY_URL)/$(PI_SYNC_IMAGE):$(TAG)
 
-# Full release: build → tag → push
-release: tag push
-	@echo "--> Release complete: api, scraper, frontend, pi-sync pushed to $(REGISTRY_URL)."
-
-
-# --- Portainer Remote Deployment ---
-.PHONY: portainer-redeploy portainer-redeploy-service
-
-PORTAINER_URL         ?= http://192.168.0.110:9000
-PORTAINER_API_KEY     ?=
-PORTAINER_STACK_NAME  ?=
-PORTAINER_ENDPOINT_ID ?= 2
-
-# Redeploy entire stack in Portainer (re-pull images and redeploy)
-# Usage: make portainer-redeploy PORTAINER_API_KEY=xxx PORTAINER_STACK_NAME=eh-stash
-portainer-redeploy:
-	@echo "--> Redeploying stack '$(PORTAINER_STACK_NAME)' in Portainer..."
-	@if [ -z "$(PORTAINER_API_KEY)" ]; then echo "Error: PORTAINER_API_KEY required."; exit 1; fi
-	@if [ -z "$(PORTAINER_STACK_NAME)" ]; then echo "Error: PORTAINER_STACK_NAME required."; exit 1; fi
-	@STACK_ID=$$(curl -s -X GET \
-		"$(PORTAINER_URL)/api/stacks" \
-		-H "X-API-Key: $(PORTAINER_API_KEY)" \
-		| jq -r '.[] | select(.Name=="$(PORTAINER_STACK_NAME)") | .Id'); \
-	if [ -z "$$STACK_ID" ] || [ "$$STACK_ID" = "null" ]; then \
-		echo "Error: Stack '$(PORTAINER_STACK_NAME)' not found."; exit 1; \
-	fi; \
-	echo "Found stack ID: $$STACK_ID"; \
-	STACK_FILE=$$(curl -s -X GET \
-		"$(PORTAINER_URL)/api/stacks/$$STACK_ID/file" \
-		-H "X-API-Key: $(PORTAINER_API_KEY)" \
-		| jq -r '.StackFileContent'); \
-	curl -s -X PUT \
-		"$(PORTAINER_URL)/api/stacks/$$STACK_ID?endpointId=$(PORTAINER_ENDPOINT_ID)" \
-		-H "X-API-Key: $(PORTAINER_API_KEY)" \
-		-H "Content-Type: application/json" \
-		-d "$$(jq -n --arg content "$$STACK_FILE" '{stackFileContent: $$content, prune: true, pullImage: true}')" \
-		| jq .; \
-	echo "--> Stack redeployed."
-
-# Remove and recreate a specific service/container in Portainer stack
-# Usage: make portainer-redeploy-service PORTAINER_API_KEY=your_api_key PORTAINER_STACK_NAME=your_stack SERVICE=frontend
-portainer-redeploy-service:
-	@echo "--> Redeploying service '$(SERVICE)' in stack '$(PORTAINER_STACK_NAME)'..."
-	@if [ -z "$(PORTAINER_API_KEY)" ]; then echo "Error: PORTAINER_API_KEY required."; exit 1; fi
-	@if [ -z "$(PORTAINER_STACK_NAME)" ]; then echo "Error: PORTAINER_STACK_NAME required."; exit 1; fi
-	@if [ -z "$(SERVICE)" ]; then echo "Error: SERVICE required. e.g. make portainer-redeploy-service SERVICE=scraper"; exit 1; fi
-	@CONTAINER_NAME="$(PORTAINER_STACK_NAME)-$(SERVICE)-1"; \
-	echo "Looking for container: $$CONTAINER_NAME"; \
-	CONTAINER_ID=$$(curl -s -X GET \
-		"$(PORTAINER_URL)/api/endpoints/$(PORTAINER_ENDPOINT_ID)/docker/containers/json?all=true" \
-		-H "X-API-Key: $(PORTAINER_API_KEY)" \
-		| jq -r ".[] | select(.Names[] | contains(\"$$CONTAINER_NAME\")) | .Id"); \
-	if [ -n "$$CONTAINER_ID" ] && [ "$$CONTAINER_ID" != "null" ]; then \
-		echo "Stopping and removing container $$CONTAINER_ID..."; \
-		curl -s -X DELETE \
-			"$(PORTAINER_URL)/api/endpoints/$(PORTAINER_ENDPOINT_ID)/docker/containers/$$CONTAINER_ID?force=true" \
-			-H "X-API-Key: $(PORTAINER_API_KEY)"; \
-	else \
-		echo "Container not found, proceeding with stack redeploy..."; \
+# Recommended release: build all 4 images + tag with :latest AND :$(GIT_SHA),
+# push both. Use the resulting SHA in the pi's /opt/stacks/ehstash/.env (TAG=...).
+release-sha: build
+	@if [ -z "$(GIT_SHA)" ]; then echo "Error: not in a git repo"; exit 1; fi
+	@if ! git diff-index --quiet HEAD --; then \
+		echo "Warning: working tree dirty — :$(GIT_SHA) will NOT represent committed state"; \
 	fi
-	@$(MAKE) portainer-redeploy PORTAINER_API_KEY=$(PORTAINER_API_KEY) PORTAINER_STACK_NAME=$(PORTAINER_STACK_NAME)
+	@echo "--> Tagging + pushing 4 images @ $(GIT_SHA) ..."
+	@for entry in \
+		"$(LOCAL_API_IMAGE):$(API_IMAGE)" \
+		"$(LOCAL_SCRAPER_IMAGE):$(SCRAPER_IMAGE)" \
+		"$(LOCAL_FRONTEND_IMAGE):$(FRONTEND_IMAGE)" \
+		"$(LOCAL_PI_SYNC_IMAGE):$(PI_SYNC_IMAGE)" \
+	; do \
+		LOCAL=$${entry%%:*}; \
+		REMOTE=$${entry#*:}; \
+		echo "  [$$REMOTE]"; \
+		docker tag  $$LOCAL:latest $(REGISTRY_URL)/$$REMOTE:latest          || exit 1; \
+		docker tag  $$LOCAL:latest $(REGISTRY_URL)/$$REMOTE:$(GIT_SHA)       || exit 1; \
+		docker push $(REGISTRY_URL)/$$REMOTE:latest                          || exit 1; \
+		docker push $(REGISTRY_URL)/$$REMOTE:$(GIT_SHA)                      || exit 1; \
+	done
+	@echo ""
+	@echo "===================================================="
+	@echo "  Released eh-stash @ $(GIT_SHA)"
+	@echo "  4 images: api, scraper, frontend, pi-sync"
+	@echo "  Each tagged :latest AND :$(GIT_SHA)"
+	@echo ""
+	@echo "  Next on pi:"
+	@echo "    edit /opt/stacks/ehstash/.env  →  TAG=$(GIT_SHA)"
+	@echo "    cd /opt/stacks/ehstash && docker compose pull && docker compose up -d"
+	@echo "===================================================="
+
+# Print local repo digests (manifest SHAs from registry) for all 4 images.
+# Useful to verify what `make release-sha` will push, or what's currently pushed.
+image-sha:
+	@for img in $(API_IMAGE) $(SCRAPER_IMAGE) $(FRONTEND_IMAGE) $(PI_SYNC_IMAGE); do \
+		DIGEST=$$(docker inspect $(REGISTRY_URL)/$$img:$(TAG) --format '{{range .RepoDigests}}{{println .}}{{end}}' 2>/dev/null \
+			| grep "^$(REGISTRY_URL)/$$img@" | head -1); \
+		if [ -n "$$DIGEST" ]; then \
+			echo "  $$DIGEST"; \
+		else \
+			echo "  $(REGISTRY_URL)/$$img:$(TAG): <not pushed yet>"; \
+		fi; \
+	done
+
+# Query the private registry directly for the current :$(TAG) manifest digest of each image.
+# Compare with `image-sha` to detect stale local builds.
+verify-remote:
+	@for img in $(API_IMAGE) $(SCRAPER_IMAGE) $(FRONTEND_IMAGE) $(PI_SYNC_IMAGE); do \
+		DIGEST=$$(curl -sSI -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+			http://$(REGISTRY_URL)/v2/$$img/manifests/$(TAG) \
+			| awk 'tolower($$1) == "docker-content-digest:" { print $$2 }' | tr -d '\r'); \
+		if [ -z "$$DIGEST" ]; then \
+			echo "  $(REGISTRY_URL)/$$img:$(TAG): <not found in registry>"; \
+		else \
+			echo "  $(REGISTRY_URL)/$$img@$$DIGEST"; \
+		fi; \
+	done
+
+# Show local + remote side by side
+diagnose:
+	@echo "--- Local (last build/push) ---"
+	@$(MAKE) image-sha --no-print-directory
+	@echo "--- Remote (current registry manifest for :$(TAG)) ---"
+	@$(MAKE) verify-remote --no-print-directory
 
 
 # --- Help ---
@@ -178,19 +186,18 @@ help:
 	@echo "  logs-scraper         Tail scraper logs"
 	@echo "  logs-frontend        Tail frontend logs"
 	@echo ""
-	@echo "Deployment:"
-	@echo "  tag                  Build and tag images for NAS registry"
-	@echo "  push                 Push tagged images to NAS registry"
-	@echo "  release              build + tag + push (full cycle)"
+	@echo "Deployment (Pi private registry $(REGISTRY_URL)):"
+	@echo "  release-sha          build + tag :latest AND :$(GIT_SHA) + push both"
+	@echo "  tag                  build + tag for :$(TAG) (low-level, no push)"
+	@echo "  push                 push :$(TAG) (low-level, no build)"
+	@echo "  image-sha            print local repo digests for all 4 images"
+	@echo "  verify-remote        query registry for current :$(TAG) manifest digests"
+	@echo "  diagnose             local + remote side by side"
 	@echo ""
-	@echo "Portainer (NAS):"
-	@echo "  portainer-redeploy          Redeploy entire stack"
-	@echo "    PORTAINER_STACK_NAME=xxx  PORTAINER_API_KEY=xxx"
-	@echo "  portainer-redeploy-service  Restart one service and redeploy"
-	@echo "    PORTAINER_STACK_NAME=xxx  PORTAINER_API_KEY=xxx  SERVICE=frontend"
+	@echo "Pi deployment flow (after make release-sha):"
+	@echo "  on pi:  edit /opt/stacks/ehstash/.env  →  TAG=<sha>"
+	@echo "          cd /opt/stacks/ehstash && docker compose pull && docker compose up -d"
 	@echo ""
 	@echo "Variables (override on command line or in Makefile.local):"
 	@echo "  REGISTRY_URL          (default: 192.168.0.110:5000)"
 	@echo "  TAG                   (default: latest)"
-	@echo "  PORTAINER_URL         (default: http://192.168.0.110:9000)"
-	@echo "  PORTAINER_ENDPOINT_ID (default: 2)"

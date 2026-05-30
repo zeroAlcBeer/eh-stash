@@ -257,7 +257,10 @@ func (t *utlsTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, fmt.Errorf("apply TLS spec: %w", err)
 	}
 
-	if err := tlsConn.Handshake(); err != nil {
+	// HandshakeContext (not Handshake) so a cancelled req.Context() — including
+	// http.Client.Timeout and our per-fetch ctx in the thumb worker — actually
+	// aborts a hung TLS handshake instead of leaking a goroutine in IO wait.
+	if err := tlsConn.HandshakeContext(req.Context()); err != nil {
 		rawConn.Close()
 		return nil, fmt.Errorf("TLS handshake: %w", err)
 	}

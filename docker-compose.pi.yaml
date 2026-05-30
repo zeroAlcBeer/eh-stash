@@ -1,6 +1,4 @@
-# docker-compose.pi.yaml — 树莓派 / Portainer 生产部署
-
-version: '3.8'
+# docker-compose.pi.yaml — 树莓派 / Dockge 生产部署
 
 services:
   postgres:
@@ -43,10 +41,12 @@ services:
       DATABASE_URL: ${DATABASE_URL}
       EX_COOKIES: ${EX_COOKIES}
       EX_BASE_URL: ${EX_BASE_URL:-https://exhentai.org}
-      RATE_INTERVAL: ${RATE_INTERVAL:-2.0}
+      RATE_INTERVAL: ${RATE_INTERVAL:-1.0}
       THUMB_RATE_INTERVAL: ${THUMB_RATE_INTERVAL:-0.5}
-      PROXY_URL: ${PROXY_URL:-}
       THUMB_DIR: /data/thumbs
+      PROXY_URL: ${PROXY_URL:-}
+    ports:
+      - "6060:6060"   # pprof — curl http://<host>:6060/debug/pprof/goroutine?debug=2
     volumes:
       - /opt/eh-stash/thumbs:/data/thumbs
     restart: unless-stopped
@@ -56,8 +56,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    expose:
-      - "3000"
+    ports:
+      - "3000:3000"
     environment:
       DATABASE_URL: ${DATABASE_URL}
       TAG_BLACKLIST: ${TAG_BLACKLIST}

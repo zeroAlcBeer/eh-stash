@@ -76,8 +76,11 @@ func RunThumbWorker(
 			}
 		}
 
-		// Download thumbnail
-		data, statusCode, err := httpClient.FetchThumb(ctx, item.ThumbURL)
+		// Download thumbnail — hard 60s cap so a hung TLS handshake / stalled body
+		// read in the custom uTLS transport can't lock up the single worker goroutine.
+		fetchCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		data, statusCode, err := httpClient.FetchThumb(fetchCtx, item.ThumbURL)
+		cancel()
 		if err != nil {
 			slog.Warn(fmt.Sprintf("[THUMB] gid=%d download failed", item.GID), "error", err)
 			database.MarkThumbFailed(ctx, item.ID, thumbMaxRetries)

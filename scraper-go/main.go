@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"sync"
@@ -19,6 +21,14 @@ import (
 func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	slog.Info("Starting Scraper Service (Go)")
+
+	// pprof for live diagnostics — curl http://<host>:6060/debug/pprof/goroutine?debug=2
+	// when the scraper hangs to see what every goroutine is blocked on.
+	go func() {
+		if err := http.ListenAndServe("0.0.0.0:6060", nil); err != nil {
+			slog.Warn("pprof server exited", "error", err)
+		}
+	}()
 
 	cfg, err := config.Load()
 	if err != nil {
