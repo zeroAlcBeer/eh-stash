@@ -332,6 +332,19 @@ func (d *DB) SetTaskDesiredStatus(ctx context.Context, taskID int, desired strin
 	return err
 }
 
+func (d *DB) ResetInterruptedStoppingTasks(ctx context.Context) (int64, error) {
+	tag, err := d.pool.Exec(ctx, `
+		UPDATE sync_tasks
+		SET status = 'stopped', updated_at = NOW()
+		WHERE status = 'running'
+		  AND desired_status = 'stopped'
+	`)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 func (d *DB) ClaimNextThumbQueueItem(ctx context.Context) (*ThumbQueueItem, error) {
 	var item ThumbQueueItem
 	err := d.pool.QueryRow(ctx, `

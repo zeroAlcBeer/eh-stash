@@ -14,8 +14,8 @@ type Limiter struct {
 	interval time.Duration
 	lastTime time.Time
 
-	banMu      sync.RWMutex
-	banUntil   time.Time
+	banMu       sync.RWMutex
+	banUntil    time.Time
 	banCooldown time.Duration
 }
 
@@ -36,7 +36,6 @@ func (l *Limiter) Acquire(ctx context.Context) error {
 	}
 
 	l.mu.Lock()
-	defer l.mu.Unlock()
 
 	// Double-check ban after acquiring lock
 	l.banMu.RLock()
@@ -61,6 +60,7 @@ func (l *Limiter) Acquire(ctx context.Context) error {
 		l.mu.Lock()
 	}
 	l.lastTime = time.Now()
+	l.mu.Unlock()
 	return nil
 }
 
@@ -130,7 +130,6 @@ func NewSimple(interval time.Duration) *SimpleLimiter {
 
 func (l *SimpleLimiter) Acquire(ctx context.Context) error {
 	l.mu.Lock()
-	defer l.mu.Unlock()
 
 	wait := l.interval - time.Since(l.lastTime)
 	if wait > 0 {
@@ -143,5 +142,6 @@ func (l *SimpleLimiter) Acquire(ctx context.Context) error {
 		l.mu.Lock()
 	}
 	l.lastTime = time.Now()
+	l.mu.Unlock()
 	return nil
 }

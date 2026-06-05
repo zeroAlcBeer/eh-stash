@@ -63,6 +63,12 @@ func (s *Scheduler) Run(ctx context.Context) {
 	workerCtx, workerCancel := context.WithCancel(ctx)
 	defer workerCancel()
 
+	if n, err := s.db.ResetInterruptedStoppingTasks(ctx); err != nil {
+		slog.Error("reset interrupted stopping tasks failed", "error", err)
+	} else if n > 0 {
+		slog.Info("reset interrupted stopping tasks", "count", n)
+	}
+
 	// Reset any rows stuck in 'processing' from a previous run before any worker
 	// starts claiming. Doing this once here (instead of inside each worker) avoids
 	// N identical resets when running a worker pool.
