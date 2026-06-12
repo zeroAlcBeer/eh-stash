@@ -3,7 +3,7 @@ import math
 import time
 from typing import Any, Dict
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -380,9 +380,18 @@ def get_task(task_id: int, db=Depends(get_db)):
 
 
 @router.get("/events")
-def admin_events(after_id: int = Query(0, ge=0)):
+def admin_events(
+    after_id: int = Query(0, ge=0),
+    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+):
+    try:
+        resumed_after = int(last_event_id) if last_event_id else 0
+    except (TypeError, ValueError):
+        resumed_after = 0
+    start_after = max(after_id, resumed_after)
+
     def stream():
-        last_id = after_id
+        last_id = start_after
         while True:
             emitted = False
             with get_cursor() as cur:

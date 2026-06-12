@@ -1265,6 +1265,7 @@ export default function AdminPage() {
   const [pendingByTask, setPendingByTask] = useState({});
   const [activeTab, setActiveTab] = useState('sync');
   const sseRetryRef = useRef(0);
+  const lastEventIdRef = useRef(0);
 
   const { createOpen: openCreate, deleteTarget } = ui;
   const setOpenCreate = (v) => dispatchUi({ type: v ? 'openCreate' : 'closeCreate' });
@@ -1291,6 +1292,15 @@ export default function AdminPage() {
     let cancelled = false;
     let source = null;
     let retryTimer = null;
+    let taskRefreshTimer = null;
+
+    const scheduleTaskRefresh = () => {
+      if (taskRefreshTimer != null) return;
+      taskRefreshTimer = window.setTimeout(() => {
+        taskRefreshTimer = null;
+        queryClient.invalidateQueries({ queryKey: ['admin', 'tasks'] });
+      }, 250);
+    };
 
     const scheduleReconnect = () => {
       if (cancelled) return;
@@ -1302,12 +1312,21 @@ export default function AdminPage() {
 
     const connect = () => {
       if (cancelled) return;
-      source = new EventSource('/api/v1/admin/events');
+      const params = new URLSearchParams();
+      if (lastEventIdRef.current > 0) {
+        params.set('after_id', String(lastEventIdRef.current));
+      }
+      const url = params.size ? `/api/v1/admin/events?${params.toString()}` : '/api/v1/admin/events';
+      source = new EventSource(url);
       source.onopen = () => {
         sseRetryRef.current = 0;
       };
-      source.addEventListener('admin.task', () => {
-        queryClient.invalidateQueries({ queryKey: ['admin', 'tasks'] });
+      source.addEventListener('admin.task', (event) => {
+        const id = Number(event.lastEventId || 0);
+        if (Number.isFinite(id) && id > 0) {
+          lastEventIdRef.current = id;
+        }
+        scheduleTaskRefresh();
       });
       source.addEventListener('ping', () => {
         // Keepalive only. Do not refetch on heartbeat.
@@ -1326,6 +1345,10 @@ export default function AdminPage() {
     return () => {
       cancelled = true;
       if (retryTimer) window.clearTimeout(retryTimer);
+      if (taskRefreshTimer != null) {
+        window.clearTimeout(taskRefreshTimer);
+        taskRefreshTimer = null;
+      }
       if (source) source.close();
     };
   }, [modalOpen, queryClient]);
