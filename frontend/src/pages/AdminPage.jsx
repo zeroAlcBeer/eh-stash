@@ -1264,6 +1264,7 @@ export default function AdminPage() {
   const [errorMsg, setErrorMsg] = useState('');
   const [pendingByTask, setPendingByTask] = useState({});
   const [activeTab, setActiveTab] = useState('sync');
+  const sseRetryRef = useRef(0);
 
   const { createOpen: openCreate, deleteTarget } = ui;
   const setOpenCreate = (v) => dispatchUi({ type: v ? 'openCreate' : 'closeCreate' });
@@ -1285,31 +1286,49 @@ export default function AdminPage() {
   const tasks = tasksData || [];
   const stats = thumbData || { pending: 0, processing: 0, done: 0, waiting: 0 };
 
-  const refreshActiveTab = useCallback(() => {
-    if (activeTab === 'sync') {
-      queryClient.invalidateQueries({ queryKey: ['admin', 'tasks'] });
-    } else if (activeTab === 'queues') {
-      queryClient.invalidateQueries({ queryKey: ['admin', 'thumbStats'] });
-    } else if (activeTab === 'recommendations') {
-      queryClient.invalidateQueries({ queryKey: ['admin', 'similarityDistribution'] });
-      queryClient.invalidateQueries({ queryKey: ['admin', 'embeddingsStatus'] });
-    }
-  }, [activeTab, queryClient]);
-
   useEffect(() => {
     if (modalOpen) return undefined;
-    const source = new EventSource('/api/v1/admin/events');
-    source.addEventListener('admin.task', () => {
-      queryClient.invalidateQueries({ queryKey: ['admin', 'tasks'] });
-    });
-    source.addEventListener('ping', () => {
-      refreshActiveTab();
-    });
-    source.onerror = () => {
-      refreshActiveTab();
+    let cancelled = false;
+    let source = null;
+    let retryTimer = null;
+
+    const scheduleReconnect = () => {
+      if (cancelled) return;
+      const attempt = sseRetryRef.current;
+      const delay = Math.min(1000 * (2 ** attempt), 15000);
+      sseRetryRef.current = attempt + 1;
+      retryTimer = window.setTimeout(connect, delay);
     };
-    return () => source.close();
-  }, [modalOpen, queryClient, refreshActiveTab]);
+
+    const connect = () => {
+      if (cancelled) return;
+      source = new EventSource('/api/v1/admin/events');
+      source.onopen = () => {
+        sseRetryRef.current = 0;
+      };
+      source.addEventListener('admin.task', () => {
+        queryClient.invalidateQueries({ queryKey: ['admin', 'tasks'] });
+      });
+      source.addEventListener('ping', () => {
+        // Keepalive only. Do not refetch on heartbeat.
+      });
+      source.onerror = () => {
+        if (source) {
+          source.close();
+          source = null;
+        }
+        scheduleReconnect();
+      };
+    };
+
+    connect();
+
+    return () => {
+      cancelled = true;
+      if (retryTimer) window.clearTimeout(retryTimer);
+      if (source) source.close();
+    };
+  }, [modalOpen, queryClient]);
 
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: ['admin', 'tasks'] });
