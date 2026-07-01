@@ -34,14 +34,7 @@ export const fetchGalleries = async (params) => {
   return getJson('/v1/galleries', { ...rest, tag: tags, allow_cosplay: cosplayParam() });
 };
 
-export const fetchStats = async () => getJson('/v1/stats');
-
 export const fetchGalleryGroup = async (groupId) =>
   getJson(`/v1/galleries/group/${groupId}`, {
-    allow_cosplay: cosplayParam(),
-  });
-
-export const fetchGallery = async (gid) =>
-  getJson(`/v1/galleries/${gid}`, {
     allow_cosplay: cosplayParam(),
   });

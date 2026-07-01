@@ -4,6 +4,8 @@
 // Resolution order:
 //   navigator.languages[*] → zh-TW (Hant/HK/TW) | zh-CN (other zh) | en
 
+const HANT_INDICATORS = new Set(['zh-tw', 'zh-hk', 'zh-hant']);
+
 function detectLocale() {
   const langs =
     typeof navigator !== 'undefined'
@@ -12,7 +14,7 @@ function detectLocale() {
   for (const l of langs) {
     if (!l) continue;
     const low = l.toLowerCase();
-    if (low.startsWith('zh-tw') || low.startsWith('zh-hk') || low.includes('hant')) {
+    if (HANT_INDICATORS.has(low) || HANT_INDICATORS.has(low.split('-').slice(0, 2).join('-'))) {
       return 'zh-TW';
     }
     if (low.startsWith('zh')) return 'zh-CN';
@@ -21,7 +23,7 @@ function detectLocale() {
   return 'en';
 }
 
-export const locale = detectLocale();
+const locale = detectLocale();
 
 const INTL_LOCALE = { 'zh-CN': 'zh-CN', 'zh-TW': 'zh-TW', en: 'en-US' };
 
@@ -245,10 +247,4 @@ export function formatDate(value, opts = { year: 'numeric', month: '2-digit', da
   if (!value) return null;
   const intl = INTL_LOCALE[locale] || 'en-US';
   return new Date(value).toLocaleDateString(intl, opts);
-}
-
-export function formatNumber(value) {
-  if (value === null || value === undefined) return '';
-  const intl = INTL_LOCALE[locale] || 'en-US';
-  return Number(value).toLocaleString(intl);
 }

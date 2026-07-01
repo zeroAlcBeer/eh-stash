@@ -1,46 +1,39 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ShieldCheck, Database, Heart, Layers, Ban } from 'lucide-react';
 import { t } from '../shared/i18n';
-import { useFocusTrap } from '../hooks/useFocusTrap';
+import { ackWelcome } from '../shared/welcome';
 
 // Two-step compliance gate:
 //   step 'age'    — Yes/No buttons. Yes → 'compare', No → 'denied' (terminal).
 //   step 'compare'— side-by-side feature explanation. Continue → ack.
 //   step 'denied' — read-only message screen; user must close the tab.
 //
-// Backdrop click and Esc are no-ops by design. Only the explicit buttons
-// advance the state. localStorage flag is set on the final ack so the modal
-// never reappears.
-export const WELCOME_STORAGE_KEY = 'ehstash:welcome-acked';
-
-export function isWelcomeAcked() {
-  try { return localStorage.getItem(WELCOME_STORAGE_KEY) === '1'; } catch { return false; }
-}
-
+// Uses the native <dialog> element for focus trapping and Esc handling.
+// Backdrop click is a no-op by design — only the explicit buttons
+// advance the state.
 export default function WelcomeModal({ onAck }) {
-  const dialogRef = useFocusTrap(true);
+  const dialogRef = useRef(null);
   const [step, setStep] = useState('age');
 
+  useEffect(() => {
+    dialogRef.current?.showModal();
+  }, []);
+
   const handleConfirm = () => {
-    try { localStorage.setItem(WELCOME_STORAGE_KEY, '1'); } catch { /* ignore */ }
+    ackWelcome();
     onAck();
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="welcome-title"
-        className="relative bg-zinc-900 rounded-xl ring-1 ring-white/10 w-full max-w-lg max-h-[90vh] overflow-y-auto"
-      >
-        {step === 'age' && <AgeStep onYes={() => setStep('compare')} onNo={() => setStep('denied')} />}
-        {step === 'compare' && <CompareStep onContinue={handleConfirm} />}
-        {step === 'denied' && <DeniedStep />}
-      </div>
-    </div>
+    <dialog
+      ref={dialogRef}
+      aria-labelledby="welcome-title"
+      className="m-auto bg-zinc-900 rounded-xl ring-1 ring-white/10 w-full max-w-lg max-h-[90vh] overflow-y-auto p-0"
+    >
+      {step === 'age' && <AgeStep onYes={() => setStep('compare')} onNo={() => setStep('denied')} />}
+      {step === 'compare' && <CompareStep onContinue={handleConfirm} />}
+      {step === 'denied' && <DeniedStep />}
+    </dialog>
   );
 }
 
@@ -70,8 +63,7 @@ function AgeStep({ onYes, onNo }) {
         <button
           type="button"
           onClick={onYes}
-          autoFocus
-          className="flex-1 px-4 py-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-zinc-950 text-sm font-semibold transition-colors"
+          className="flex-1 px-4 py-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-white text-sm font-semibold transition-colors"
         >
           {t('welcome.age.yes')}
         </button>
@@ -127,8 +119,7 @@ function CompareStep({ onContinue }) {
         <button
           type="button"
           onClick={onContinue}
-          autoFocus
-          className="w-full px-4 py-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-zinc-950 text-sm font-semibold transition-colors"
+          className="w-full px-4 py-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-white text-sm font-semibold transition-colors"
         >
           {t('welcome.compare.continue')}
         </button>

@@ -11,7 +11,7 @@ export function getAllowCosplay() {
   try { return localStorage.getItem(ALLOW_COSPLAY_KEY) === '1'; } catch { return false; }
 }
 
-export function setAllowCosplay(value) {
+function setAllowCosplay(value) {
   try { localStorage.setItem(ALLOW_COSPLAY_KEY, value ? '1' : '0'); } catch { /* ignore */ }
   window.dispatchEvent(new CustomEvent(CHANGE_EVENT));
 }
