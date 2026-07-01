@@ -8,6 +8,8 @@ import FilterPanel from '../components/FilterPanel';
 import GroupModal from '../components/GroupModal';
 import { useTagTranslation } from '../hooks/useTagTranslation';
 import { t } from '../shared/i18n';
+import { IS_PUBLIC } from '../shared/mode';
+import { useAllowCosplay } from '../shared/settings';
 
 const PAGE_SIZE = 100;
 
@@ -231,6 +233,7 @@ const GalleryPage = ({ favoritesOnly = false, recommendedOnly = false }) => {
   const [showTranslation, setShowTranslation] = useState(false);
   const [groupModalId, setGroupModalId] = useState(null);
   const { translate } = useTagTranslation(showTranslation);
+  const [allowCosplay] = useAllowCosplay();
 
   // Sync state → URL
   useEffect(() => {
@@ -240,7 +243,7 @@ const GalleryPage = ({ favoritesOnly = false, recommendedOnly = false }) => {
   const apiSort = recommendedOnly ? 'recommended' : 'gid_desc';
 
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['galleries', page, apiSort, filters.category, filters.min_fav, filters.tags, filters.is_favorited],
+    queryKey: ['galleries', page, apiSort, filters.category, filters.min_fav, filters.tags, filters.is_favorited, IS_PUBLIC && allowCosplay],
     queryFn: () => {
       const { sort, min_rating, is_favorited, tags, ...apiFilters } = filters;
       const params = { page, page_size: PAGE_SIZE, sort: apiSort, tags, ...apiFilters };

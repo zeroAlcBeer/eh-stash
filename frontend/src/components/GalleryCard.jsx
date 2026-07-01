@@ -47,7 +47,7 @@ function GridCard({ gallery, onGroupClick }) {
           <span className={`px-1.5 py-0.5 rounded text-xs font-bold text-white ${catStyle}`}>
             {category}
           </span>
-          {!gallery.is_active && (
+          {gallery.is_active === false && (
             <span className="px-1.5 py-0.5 rounded text-xs font-bold text-white bg-red-700/80">
               Deleted
             </span>
