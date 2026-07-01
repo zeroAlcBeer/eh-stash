@@ -7,14 +7,15 @@ import GalleryCard from '../components/GalleryCard';
 import FilterPanel from '../components/FilterPanel';
 import GroupModal from '../components/GroupModal';
 import { useTagTranslation } from '../hooks/useTagTranslation';
+import { t } from '../shared/i18n';
 
 const PAGE_SIZE = 100;
 
 const SORT_OPTIONS = [
-  { value: 'fav_count', label: 'Fav', Icon: Heart },
-  { value: 'rating', label: 'Rating', Icon: Star },
-  { value: 'comment_count', label: 'Comments', Icon: MessageCircle },
-  { value: 'posted_at', label: 'Date', Icon: Calendar },
+  { value: 'fav_count', i18n: 'sort.fav', Icon: Heart },
+  { value: 'rating', i18n: 'sort.rating', Icon: Star },
+  { value: 'comment_count', i18n: 'sort.comments', Icon: MessageCircle },
+  { value: 'posted_at', i18n: 'sort.date', Icon: Calendar },
 ];
 
 const RATING_CYCLE = [0, 3.5, 4, 4.5];
@@ -60,6 +61,7 @@ function SortDropdown({ value, onChange }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   const current = SORT_OPTIONS.find((o) => o.value === value) ?? SORT_OPTIONS[0];
+  const currentLabel = t(current.i18n);
 
   useEffect(() => {
     if (!open) return;
@@ -75,15 +77,15 @@ function SortDropdown({ value, onChange }) {
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-haspopup="listbox"
-        aria-label={`排序方式: ${current.label}`}
+        aria-label={t('sort.label', { label: currentLabel })}
         className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs text-gray-400 hover:text-white hover:bg-white/10 transition-all border border-white/10"
       >
         <current.Icon size={13} />
-        {current.label}
+        {currentLabel}
         <ChevronDown size={11} className="text-gray-600" />
       </button>
       {open && (
-        <div aria-label="排序选项" className="absolute right-0 top-full mt-1 w-32 rounded-lg bg-zinc-900 border border-white/10 shadow-xl z-50 overflow-hidden">
+        <div aria-label={t('sort.menu')} className="absolute right-0 top-full mt-1 w-32 rounded-lg bg-zinc-900 border border-white/10 shadow-xl z-50 overflow-hidden">
           {SORT_OPTIONS.map((o) => (
             <button
               key={o.value}
@@ -94,7 +96,7 @@ function SortDropdown({ value, onChange }) {
                 }`}
             >
               <o.Icon size={13} />
-              {o.label}
+              {t(o.i18n)}
             </button>
           ))}
         </div>
@@ -115,14 +117,14 @@ function RatingCycleButton({ value, onChange }) {
     <button
       type="button"
       onClick={cycle}
-      aria-label={active ? `最低评分 ${value}` : '评分筛选: 全部'}
+      aria-label={active ? t('rating.min', { value }) : t('rating.filterAll')}
       className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs transition-all border ${active
         ? 'text-amber-400 border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20'
         : 'text-gray-400 border-white/10 hover:text-white hover:bg-white/10'
         }`}
     >
       <Star size={13} className={active ? 'fill-amber-400' : ''} />
-      {active ? `≥${value}` : 'Any'}
+      {active ? `≥${value}` : t('rating.any')}
     </button>
   );
 }
@@ -150,12 +152,12 @@ function PaginationBar({ page, totalPages, onPageChange }) {
   };
 
   return (
-    <nav aria-label="分页" className="fixed bottom-0 left-0 right-0 z-30 flex justify-center py-2 bg-zinc-950/80 backdrop-blur-md border-t border-white/5">
+    <nav aria-label={t('page.pagination')} className="fixed bottom-0 left-0 right-0 z-30 flex justify-center py-2 bg-zinc-950/80 backdrop-blur-md border-t border-white/5">
       <div className="flex items-center gap-1">
-        <button type="button" className={PAGINATION_BTN_CLS(page === 1)} onClick={() => onPageChange(1)} disabled={page === 1} aria-label="第一页">
+        <button type="button" className={PAGINATION_BTN_CLS(page === 1)} onClick={() => onPageChange(1)} disabled={page === 1} aria-label={t('page.first')}>
           <ChevronFirst size={16} />
         </button>
-        <button type="button" className={PAGINATION_BTN_CLS(page === 1)} onClick={() => onPageChange(page - 1)} disabled={page === 1} aria-label="上一页">
+        <button type="button" className={PAGINATION_BTN_CLS(page === 1)} onClick={() => onPageChange(page - 1)} disabled={page === 1} aria-label={t('page.prev')}>
           <ChevronLeft size={16} />
         </button>
 
@@ -167,7 +169,7 @@ function PaginationBar({ page, totalPages, onPageChange }) {
                 key={p}
                 type="button"
                 onClick={() => onPageChange(p)}
-                aria-label={`第 ${p} 页`}
+                aria-label={t('page.number', { page: p })}
                 aria-current={p === page ? 'page' : undefined}
                 className={`w-10 h-10 rounded-lg text-sm font-medium transition-colors ${p === page
                   ? 'bg-blue-600 text-white'
@@ -179,10 +181,10 @@ function PaginationBar({ page, totalPages, onPageChange }) {
             )
         )}
 
-        <button type="button" className={PAGINATION_BTN_CLS(page === totalPages)} onClick={() => onPageChange(page + 1)} disabled={page === totalPages} aria-label="下一页">
+        <button type="button" className={PAGINATION_BTN_CLS(page === totalPages)} onClick={() => onPageChange(page + 1)} disabled={page === totalPages} aria-label={t('page.next')}>
           <ChevronRight size={16} />
         </button>
-        <button type="button" className={PAGINATION_BTN_CLS(page === totalPages)} onClick={() => onPageChange(totalPages)} disabled={page === totalPages} aria-label="最后一页">
+        <button type="button" className={PAGINATION_BTN_CLS(page === totalPages)} onClick={() => onPageChange(totalPages)} disabled={page === totalPages} aria-label={t('page.last')}>
           <ChevronLast size={16} />
         </button>
       </div>
@@ -330,9 +332,9 @@ const GalleryPage = ({ favoritesOnly = false, recommendedOnly = false }) => {
         <div className="text-xs text-gray-500">
           {isLoading ? '…' : (
             <>
-              {total.toLocaleString()} results · page {page} / {totalPages}
+              {t('results.summary', { total: total.toLocaleString(), page, pages: totalPages })}
               {filters.min_rating > 0 && (
-                <span className="ml-1 text-amber-400/70">· 显示 {items.length} 条</span>
+                <span className="ml-1 text-amber-400/70">{t('results.filtered', { count: items.length })}</span>
               )}
             </>
           )}
@@ -343,7 +345,7 @@ const GalleryPage = ({ favoritesOnly = false, recommendedOnly = false }) => {
             <button
               type="button"
               onClick={() => setShowTranslation((v) => !v)}
-              aria-label={showTranslation ? '关闭中文翻译' : '开启中文翻译'}
+              aria-label={showTranslation ? t('translation.off') : t('translation.on')}
               aria-pressed={showTranslation}
               className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs transition-all border ${showTranslation
                 ? 'text-sky-400 border-sky-500/40 bg-sky-500/10 hover:bg-sky-500/20'
@@ -351,7 +353,7 @@ const GalleryPage = ({ favoritesOnly = false, recommendedOnly = false }) => {
                 }`}
             >
               <Languages size={13} />
-              中文
+              {t('translation.label')}
             </button>
           )}
           <SortDropdown
@@ -365,11 +367,11 @@ const GalleryPage = ({ favoritesOnly = false, recommendedOnly = false }) => {
           <button
             type="button"
             onClick={toggleViewMode}
-            aria-label={viewMode === 'grid' ? '切换到列表视图' : '切换到网格视图'}
+            aria-label={viewMode === 'grid' ? t('view.toList') : t('view.toGrid')}
             className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs text-gray-400 hover:text-white hover:bg-white/10 transition-all border border-white/10"
           >
             {viewMode === 'grid' ? <LayoutList size={14} /> : <LayoutGrid size={14} />}
-            {viewMode === 'grid' ? 'List' : 'Grid'}
+            {viewMode === 'grid' ? t('view.list') : t('view.grid')}
           </button>
         </div>
       </div>
@@ -389,8 +391,8 @@ const GalleryPage = ({ favoritesOnly = false, recommendedOnly = false }) => {
       ) : !isLoading && !isError && items.length === 0 && recommendedOnly ? (
         <div className="flex flex-col items-center justify-center py-24 text-gray-500">
           <Sparkles size={36} className="mb-3 text-gray-600" />
-          <p className="text-sm">还没有推荐内容</p>
-          <p className="text-xs text-gray-600 mt-1">请先在 Admin 中创建并启动 Favorites Sync 任务</p>
+          <p className="text-sm">{t('recommended.empty')}</p>
+          <p className="text-xs text-gray-600 mt-1">{t('recommended.empty.hint')}</p>
         </div>
       ) : (
         viewMode === 'grid' ? (

@@ -1,5 +1,6 @@
 import React, { useState, useRef, useMemo, useId } from 'react';
 import { Search, X, ChevronDown, ChevronUp, SlidersHorizontal } from 'lucide-react';
+import { t } from '../shared/i18n';
 
 const CATEGORIES = [
   'Manga', 'Doujinshi', 'Cosplay', 'Asian Porn',
@@ -61,7 +62,7 @@ const FilterPanel = ({ filters, onChange, tagSuggestions = EMPTY_TAGS }) => {
   };
 
   const removeTag = (val) => {
-    onChange({ ...filters, tags: tags.filter((t) => t !== val) });
+    onChange({ ...filters, tags: tags.filter((tag) => tag !== val) });
   };
 
   const commitTag = () => {
@@ -153,17 +154,17 @@ const FilterPanel = ({ filters, onChange, tagSuggestions = EMPTY_TAGS }) => {
             {/* Selected tag pills */}
             {tags.length > 0 && (
               <div className="flex flex-wrap gap-1 mb-1">
-                {tags.map((t) => (
+                {tags.map((tagVal) => (
                   <span
-                    key={t}
+                    key={tagVal}
                     className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-blue-500/20 text-blue-300 text-xs border border-blue-500/30"
                   >
-                    {t}
+                    {tagVal}
                     <button
                       type="button"
-                      onClick={() => removeTag(t)}
+                      onClick={() => removeTag(tagVal)}
                       className="p-0.5 hover:text-white transition-colors rounded"
-                      aria-label={`移除标签 ${t}`}
+                      aria-label={t('filter.removeTag', { tag: tagVal })}
                     >
                       <X size={12} />
                     </button>
@@ -241,7 +242,7 @@ const FilterPanel = ({ filters, onChange, tagSuggestions = EMPTY_TAGS }) => {
                     type="button"
                     onClick={clearTag}
                     className="absolute right-1.5 p-1 text-gray-500 hover:text-white transition-colors rounded"
-                    aria-label="清除搜索"
+                    aria-label={t('filter.clearSearch')}
                   >
                     <X size={13} />
                   </button>
@@ -276,7 +277,7 @@ const FilterPanel = ({ filters, onChange, tagSuggestions = EMPTY_TAGS }) => {
               )}
             </div>
             {showSuggestions && filteredSuggestions.length === 0 && tagInput.trim() && (
-              <div className="mt-1 text-xs text-gray-500">无匹配 tag</div>
+              <div className="mt-1 text-xs text-gray-500">{t('filter.noMatch')}</div>
             )}
           </div>
 

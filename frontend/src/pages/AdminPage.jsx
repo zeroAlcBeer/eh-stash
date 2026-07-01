@@ -31,6 +31,7 @@ import {
   retryTask,
 } from '../api/admin';
 import { useCountUp } from '../hooks/useCountUp';
+import { t } from '../shared/i18n';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -518,8 +519,8 @@ function SyncTaskRunRow({ task, rowAction, runTaskAction, setDeleteTarget, expan
         <div className="flex items-center justify-end gap-1">
           <button
             type="button"
-            title={isIncremental ? '启用并投递 kick' : '启动任务'}
-            aria-label={`启动任务 ${task.name}`}
+            title={isIncremental ? t('admin.task.startKick') : t('admin.task.start')}
+            aria-label={t('admin.task.startAria', { name: task.name })}
             disabled={!canStart}
             onClick={() => runTaskAction(task.id, 'start', () => startTask(task.id))}
             className="inline-flex items-center justify-center gap-2 rounded-md border border-emerald-500/20 px-3 py-2 text-xs text-emerald-300 hover:bg-emerald-500/10 transition-all disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
@@ -528,8 +529,8 @@ function SyncTaskRunRow({ task, rowAction, runTaskAction, setDeleteTarget, expan
           </button>
           <button
             type="button"
-            title="取消当前 job 或停用定义"
-            aria-label={`停止任务 ${task.name}`}
+            title={t('admin.task.stop')}
+            aria-label={t('admin.task.stopAria', { name: task.name })}
             disabled={!canStop}
             onClick={() => runTaskAction(task.id, 'stop', () => stopTask(task.id))}
             className="inline-flex items-center justify-center gap-2 rounded-md border border-amber-500/20 px-3 py-2 text-xs text-amber-300 hover:bg-amber-500/10 transition-all disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
@@ -538,8 +539,8 @@ function SyncTaskRunRow({ task, rowAction, runTaskAction, setDeleteTarget, expan
           </button>
           <button
             type="button"
-            title="重试最近 job"
-            aria-label={`重试任务 ${task.name}`}
+            title={t('admin.task.retry')}
+            aria-label={t('admin.task.retryAria', { name: task.name })}
             disabled={!canRetry}
             onClick={() => runTaskAction(task.id, 'retry', () => retryTask(task.id))}
             className="inline-flex items-center justify-center gap-2 rounded-md border border-cyan-500/20 px-3 py-2 text-xs text-cyan-300 hover:bg-cyan-500/10 transition-all disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
@@ -548,8 +549,8 @@ function SyncTaskRunRow({ task, rowAction, runTaskAction, setDeleteTarget, expan
           </button>
           <button
             type="button"
-            title="删除任务定义"
-            aria-label={`删除任务 ${task.name}`}
+            title={t('admin.task.delete')}
+            aria-label={t('admin.task.deleteAria', { name: task.name })}
             disabled={!canDelete}
             onClick={() => setDeleteTarget(task)}
             className="inline-flex items-center justify-center gap-2 rounded-md border border-rose-500/20 px-3 py-2 text-xs text-rose-300 hover:bg-rose-500/10 transition-all disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
@@ -558,8 +559,8 @@ function SyncTaskRunRow({ task, rowAction, runTaskAction, setDeleteTarget, expan
           </button>
           <button
             type="button"
-            title={expanded ? '收起详情' : '展开详情'}
-            aria-label={`${expanded ? '收起' : '展开'}任务 ${task.name} 详情`}
+            title={expanded ? t('admin.task.collapse') : t('admin.task.expand')}
+            aria-label={expanded ? t('admin.task.collapseAria', { name: task.name }) : t('admin.task.expandAria', { name: task.name })}
             onClick={onToggle}
             className="inline-flex items-center justify-center rounded-md border border-white/10 px-2.5 py-2 text-xs text-gray-400 hover:bg-white/5 hover:text-white transition-all"
           >
@@ -717,17 +718,17 @@ function CreateTaskModal({ onClose, onCreated, tasks }) {
 
   const handleSubmit = async () => {
     setErrorMsg('');
-    if (!form.name.trim()) { setErrorMsg('名称不能为空'); return; }
+    if (!form.name.trim()) { setErrorMsg(t('admin.task.nameRequired')); return; }
     if (form.type === 'incremental' && hasIncrementalTask) {
-      setErrorMsg('仅允许创建一个 gallery incremental sync');
+      setErrorMsg(t('admin.task.oneIncremental'));
       return;
     }
     if (form.type === 'favorites' && hasFavoritesSource) {
-      setErrorMsg('仅允许创建一个 favorites source sync');
+      setErrorMsg(t('admin.task.oneFavorites'));
       return;
     }
     if (form.type === 'incremental' && (!Array.isArray(form.config.categories) || form.config.categories.length === 0)) {
-      setErrorMsg('incremental 至少选择一个分类');
+      setErrorMsg(t('admin.task.minOneCategory'));
       return;
     }
     setBusy(true);
@@ -737,7 +738,7 @@ function CreateTaskModal({ onClose, onCreated, tasks }) {
       onCreated();
       onClose();
     } catch (err) {
-      setErrorMsg(err.message || '创建任务失败');
+      setErrorMsg(err.message || t('admin.task.createFailed'));
     } finally {
       setBusy(false);
     }
@@ -748,16 +749,16 @@ function CreateTaskModal({ onClose, onCreated, tasks }) {
       ref={dialogRef}
       onClose={handleClose}
       onClick={handleBackdropClick}
-      aria-label="新建同步任务"
+      aria-label={t('admin.task.createTitle')}
       className="m-auto w-full max-w-[calc(100%-2rem)] sm:max-w-md rounded-2xl border border-white/10 bg-zinc-900 text-white shadow-2xl p-0"
     >
         <div className="flex items-center justify-between px-6 py-4 border-b border-white/10">
-          <h2 className="text-base font-semibold text-white">新建同步任务</h2>
+          <h2 className="text-base font-semibold text-white">{t('admin.task.createTitle')}</h2>
           <button
             type="button"
             onClick={handleClose}
             className="p-2 -mr-1 text-gray-400 hover:text-white transition-colors rounded-lg hover:bg-white/10"
-            aria-label="关闭"
+            aria-label={t('admin.task.close')}
           >
             <XCircle size={18} />
           </button>
@@ -766,14 +767,14 @@ function CreateTaskModal({ onClose, onCreated, tasks }) {
         <div className="px-6 py-5 space-y-4">
           <InputField
             id="task-name"
-            label="任务名称"
+            label={t('admin.task.name')}
             value={form.name}
             onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
             placeholder="e.g. cosplay-full-01"
           />
           <SelectField
             id="task-type"
-            label="类型"
+            label={t('admin.task.type')}
             value={form.type}
             onChange={(e) => handleTypeChange(e.target.value)}
             options={[
@@ -785,14 +786,14 @@ function CreateTaskModal({ onClose, onCreated, tasks }) {
           {form.type === 'full' ? (
             <SelectField
               id="task-category"
-              label="分类 (Category)"
+              label={t('admin.task.category')}
               value={form.category}
               onChange={(e) => setForm((p) => ({ ...p, category: e.target.value }))}
               options={CATEGORY_OPTIONS}
             />
           ) : form.type === 'incremental' ? (
             <div>
-              <span className="block text-xs font-medium text-gray-400 mb-1.5">分类 (categories)</span>
+              <span className="block text-xs font-medium text-gray-400 mb-1.5">{t('admin.task.categories')}</span>
               <div className="rounded-lg border border-white/10 bg-white/5 p-2.5 space-y-1.5 max-h-44 overflow-y-auto">
                 {CATEGORY_OPTIONS.map((category) => {
                   const checked = (form.config.categories || []).includes(category);
@@ -809,7 +810,7 @@ function CreateTaskModal({ onClose, onCreated, tasks }) {
                   );
                 })}
               </div>
-              <p className="mt-1.5 text-xs text-gray-500">Gallery incremental 使用 Mixed scope，按上传活跃度抓取。</p>
+              <p className="mt-1.5 text-xs text-gray-500">{t('admin.task.incrementalHint')}</p>
             </div>
           ) : null /* favorites: no category selector */}
 
@@ -819,16 +820,16 @@ function CreateTaskModal({ onClose, onCreated, tasks }) {
             {form.type === 'full' ? (
               <InputField
                 id="config-start-gid"
-                label="start_gid (可选)"
+                label={t('admin.task.startGid')}
                 type="number"
                 value={form.config.start_gid}
                 onChange={(e) => setForm((p) => ({ ...p, config: { ...p.config, start_gid: e.target.value } }))}
-                placeholder="留空从最新开始"
+                placeholder={t('admin.task.startGidHint')}
               />
             ) : form.type === 'favorites' ? (
               <InputField
                 id="config-interval"
-                label="run_interval_hours (同步间隔/小时)"
+                label={t('admin.task.intervalHours')}
                 type="number"
                 step="1"
                 value={form.config.run_interval_hours}
@@ -856,12 +857,12 @@ function CreateTaskModal({ onClose, onCreated, tasks }) {
           </div>
           {form.type === 'incremental' && hasIncrementalTask && (
             <div role="alert" className="rounded-lg bg-amber-500/10 border border-amber-500/30 px-3 py-2 text-sm text-amber-300">
-              已存在 gallery incremental sync。系统仅允许一个。
+              {t('admin.task.existsIncremental')}
             </div>
           )}
           {form.type === 'favorites' && hasFavoritesSource && (
             <div role="alert" className="rounded-lg bg-amber-500/10 border border-amber-500/30 px-3 py-2 text-sm text-amber-300">
-              已存在 favorites source sync。系统仅允许一个。
+              {t('admin.task.existsFavorites')}
             </div>
           )}
 
@@ -879,7 +880,7 @@ function CreateTaskModal({ onClose, onCreated, tasks }) {
             disabled={busy}
             className="px-4 py-2 text-sm rounded-lg text-gray-400 hover:text-white hover:bg-white/10 transition-all disabled:opacity-50"
           >
-            取消
+            {t('admin.task.cancel')}
           </button>
           <button
             type="submit"
@@ -888,7 +889,7 @@ function CreateTaskModal({ onClose, onCreated, tasks }) {
             className="px-4 py-2 text-sm rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium transition-all disabled:opacity-50 flex items-center gap-2"
           >
             {busy && <Loader2 size={14} className="animate-spin" />}
-            创建任务
+            {t('admin.task.create')}
           </button>
         </div>
     </dialog>
@@ -928,17 +929,17 @@ function DeleteTaskModal({ task, busy, onClose, onConfirm }) {
       ref={dialogRef}
       onClose={handleClose}
       onClick={handleBackdropClick}
-      aria-label="确认删除任务"
+      aria-label={t('admin.task.deleteConfirm')}
       className="m-auto w-full max-w-[calc(100%-2rem)] sm:max-w-md rounded-2xl border border-rose-500/30 bg-zinc-900 text-white shadow-2xl p-0"
     >
         <div className="flex items-center gap-2 px-6 py-4 border-b border-white/10">
           <AlertTriangle size={16} className="text-rose-400" />
-          <h2 className="text-base font-semibold text-white">确认删除任务</h2>
+          <h2 className="text-base font-semibold text-white">{t('admin.task.deleteConfirm')}</h2>
         </div>
 
         <div className="px-6 py-5 space-y-3">
           <p className="text-sm text-gray-300">
-            请输入任务名以确认删除：
+            {t('admin.task.deleteHint')}
             <span className="ml-1 font-mono text-white">{task.name}</span>
           </p>
           <input
@@ -946,7 +947,7 @@ function DeleteTaskModal({ task, busy, onClose, onConfirm }) {
             value={value}
             onChange={(e) => setValue(e.target.value)}
             placeholder={task.name}
-            aria-label="输入任务名以确认"
+            aria-label={t('admin.task.deleteInputAria')}
             className="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-white text-sm
                        placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-rose-500/50
                        focus:border-rose-500/50 transition-all"
@@ -960,7 +961,7 @@ function DeleteTaskModal({ task, busy, onClose, onConfirm }) {
             disabled={busy}
             className="px-4 py-2 text-sm rounded-lg text-gray-400 hover:text-white hover:bg-white/10 transition-all disabled:opacity-50"
           >
-            取消
+            {t('admin.task.cancel')}
           </button>
           <button
             type="button"
@@ -969,7 +970,7 @@ function DeleteTaskModal({ task, busy, onClose, onConfirm }) {
             className="px-4 py-2 text-sm rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-medium transition-all disabled:opacity-50 flex items-center gap-2"
           >
             {busy && <Loader2 size={14} className="animate-spin" />}
-            删除
+            {t('admin.task.deleteBtn')}
           </button>
         </div>
     </dialog>
@@ -1042,12 +1043,12 @@ function SimilarityDistributionPanel() {
     <div className="rounded-xl border border-white/10 bg-white/5 backdrop-blur-sm p-5 shadow-sm space-y-4">
       {/* Embeddings status row */}
       <div className="flex items-center gap-4 text-xs text-gray-400 flex-wrap">
-        <span>词表: <span className="text-white font-mono">{status.vocab_size.toLocaleString()}</span> / dim {status.dim_count.toLocaleString()}</span>
-        <span>已嵌入: <span className="text-white font-mono">{status.embedded_count.toLocaleString()}</span> / {status.total_galleries.toLocaleString()}</span>
+        <span>{t('admin.sim.vocab')}: <span className="text-white font-mono">{status.vocab_size.toLocaleString()}</span> / dim {status.dim_count.toLocaleString()}</span>
+        <span>{t('admin.sim.embedded')}: <span className="text-white font-mono">{status.embedded_count.toLocaleString()}</span> / {status.total_galleries.toLocaleString()}</span>
         {status.pending_count > 0 && (
-          <span className="text-amber-400">待处理: {status.pending_count.toLocaleString()}</span>
+          <span className="text-amber-400">{t('admin.sim.pending')}: {status.pending_count.toLocaleString()}</span>
         )}
-        <span>偏好画廊: <span className="text-white font-mono">{status.profile_liked_count.toLocaleString()}</span></span>
+        <span>{t('admin.sim.profileLiked')}: <span className="text-white font-mono">{status.profile_liked_count.toLocaleString()}</span></span>
         <span className={status.profile_ready ? 'text-emerald-400' : 'text-rose-400'}>
           {status.profile_ready ? 'profile ready' : 'profile not ready'}
         </span>
@@ -1055,7 +1056,7 @@ function SimilarityDistributionPanel() {
 
       {!dist.buckets.length ? (
         <div className="text-center text-gray-500 text-sm py-6">
-          暂无相似度数据，请先运行 Favorites Sync，等待词表构建和向量化完成
+          {t('admin.sim.noData')}
         </div>
       ) : (
         <>
@@ -1063,10 +1064,10 @@ function SimilarityDistributionPanel() {
           <div className="flex items-center justify-between flex-wrap gap-2">
             <div className="flex items-center gap-4 text-sm">
               <span className="text-gray-400">
-                候选总数: <span className="text-white font-semibold">{dist.total.toLocaleString()}</span>
+                {t('admin.sim.candidates')}: <span className="text-white font-semibold">{dist.total.toLocaleString()}</span>
               </span>
               <span className="text-gray-400">
-                相似度 ≥ {threshold.toFixed(2)}: <span className="text-blue-400 font-semibold">{displayCount.toLocaleString()}</span>
+                {t('admin.sim.aboveThreshold', { threshold: threshold.toFixed(2) })}: <span className="text-blue-400 font-semibold">{displayCount.toLocaleString()}</span>
               </span>
             </div>
             {localThreshold != null && localThreshold !== dist.threshold && (
@@ -1077,13 +1078,13 @@ function SimilarityDistributionPanel() {
                 className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium transition-all disabled:opacity-50 flex items-center gap-1.5"
               >
                 {saving && <Loader2 size={12} className="animate-spin" />}
-                保存阈值 {localThreshold.toFixed(2)}
+                {t('admin.sim.saveThreshold', { threshold: localThreshold.toFixed(2) })}
               </button>
             )}
           </div>
 
           {/* Histogram */}
-          <div className="relative" aria-label="相似度分布直方图">
+          <div className="relative" aria-label={t('admin.sim.histogram')}>
             <div className="flex items-end gap-px h-32">
               {dist.buckets.map((b, i) => {
                 const pct = b.count > 0 ? Math.log(b.count + 1) / Math.log(maxCount + 1) : 0;
@@ -1137,7 +1138,7 @@ function SimilarityDistributionPanel() {
 
           {/* Slider */}
           <div className="flex items-center gap-3">
-            <label htmlFor="threshold-slider" className="text-xs text-gray-400 shrink-0">阈值</label>
+            <label htmlFor="threshold-slider" className="text-xs text-gray-400 shrink-0">{t('admin.sim.threshold')}</label>
             <input
               id="threshold-slider"
               type="range"
@@ -1155,7 +1156,7 @@ function SimilarityDistributionPanel() {
               step={0.01}
               value={threshold}
               onChange={(e) => setLocalThreshold(Number(e.target.value))}
-              aria-label="阈值数值"
+              aria-label={t('admin.sim.thresholdValue')}
               className="w-20 px-2 py-1 rounded-lg bg-white/5 border border-white/10 text-white text-xs text-center
                          focus:outline-none focus:ring-2 focus:ring-blue-500/40 transition-all"
             />
@@ -1194,7 +1195,7 @@ function SyncRunsPanel({
   if (tasks.length === 0) {
     return (
       <div className="rounded-lg border border-white/10 bg-zinc-950/45 text-center py-12 text-gray-500 text-sm">
-        暂无任务，点击「新建任务」开始
+        {t('admin.task.empty')}
       </div>
     );
   }
@@ -1230,7 +1231,7 @@ function QueuesPanel({ stats }) {
             label="Waiting"
             value={stats.waiting}
             color="text-orange-400"
-            infoTitle="失败重试等待中，冷却后进入 Pending"
+            infoTitle={t('admin.queue.waitingInfo')}
           />
           <QueueStage icon={RefreshCw} label="Pending" value={stats.pending} color="text-yellow-400" />
           <QueueStage icon={Loader2} label="Processing" value={stats.processing} color="text-blue-400" />
@@ -1405,7 +1406,7 @@ export default function AdminPage() {
       refresh();
       if (onSuccess) onSuccess(result);
     } catch (err) {
-      setErrorMsg(err.message || '操作失败');
+      setErrorMsg(err.message || t('admin.operationFailed'));
     } finally {
       clearTaskPending(taskId);
     }
@@ -1424,7 +1425,7 @@ export default function AdminPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-white">Admin</h1>
-          <p className="text-sm text-gray-500 mt-0.5">任务调度 &amp; 缩略图队列</p>
+          <p className="text-sm text-gray-500 mt-0.5">{t('admin.subtitle')}</p>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -1433,7 +1434,7 @@ export default function AdminPage() {
             className="flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium transition-all"
           >
             <Plus size={16} />
-            新建任务
+            {t('admin.newTask')}
           </button>
         </div>
       </div>
@@ -1443,7 +1444,7 @@ export default function AdminPage() {
         <div role="alert" className="rounded-xl bg-rose-500/10 border border-rose-500/30 px-4 py-3 text-sm text-rose-400 flex items-center gap-2">
           <XCircle size={16} />
           {errorMsg}
-          <button type="button" onClick={() => setErrorMsg('')} className="ml-auto p-1 hover:text-white transition-colors rounded" aria-label="关闭错误提示">
+          <button type="button" onClick={() => setErrorMsg('')} className="ml-auto p-1 hover:text-white transition-colors rounded" aria-label={t('admin.closeError')}>
             <XCircle size={14} />
           </button>
         </div>
@@ -1451,7 +1452,7 @@ export default function AdminPage() {
       {(tasksError || thumbError) && (
         <div role="alert" className="rounded-xl bg-rose-500/10 border border-rose-500/30 px-4 py-3 text-sm text-rose-400 flex items-center gap-2">
           <XCircle size={16} />
-          加载数据失败，请检查后端连接
+          {t('admin.loadError')}
         </div>
       )}
 

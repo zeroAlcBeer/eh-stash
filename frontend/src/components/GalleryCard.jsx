@@ -1,7 +1,8 @@
 import React from 'react';
 import { Star, Heart, MessageCircle, ExternalLink, FileText, Globe, User, Calendar, Layers } from 'lucide-react';
 import TagBadge from './TagBadge';
-import { getExUrl, LINK_TARGET, CATEGORY_STYLES, FALLBACK_IMAGE } from '../shared/gallery';
+import { getExUrl, LINK_TARGET, CATEGORY_STYLES, FALLBACK_IMAGE, getThumbUrl } from '../shared/gallery';
+import { t, formatDate } from '../shared/i18n';
 
 const NS_ORDER = ['artist', 'group', 'parody', 'character', 'female', 'male', 'language', 'misc'];
 
@@ -13,9 +14,7 @@ function GridCard({ gallery, onGroupClick }) {
   const exUrl = getExUrl(gid, token);
   const catStyle = CATEGORY_STYLES[category] || CATEGORY_STYLES['Misc'];
   const hasGroup = gallery.group_count > 1;
-  const date = posted_at
-    ? new Date(posted_at).toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
-    : null;
+  const date = formatDate(posted_at);
 
   const handleClick = (e) => {
     if (hasGroup) {
@@ -36,7 +35,7 @@ function GridCard({ gallery, onGroupClick }) {
       {/* Cover */}
       <div className="relative" style={{ paddingTop: '140%' }}>
         <img
-          src={thumb ? `/v1/thumbs/${gid}` : FALLBACK_IMAGE}
+          src={thumb ? getThumbUrl(gid) : FALLBACK_IMAGE}
           alt={displayTitle}
           onError={(e) => { e.target.onerror = null; e.target.src = FALLBACK_IMAGE; }}
           className="absolute inset-0 w-full h-full object-contain bg-zinc-950"
@@ -105,9 +104,7 @@ function ListRow({ gallery, onTagSearch, translate, onGroupClick }) {
   const exUrl = getExUrl(gid, token);
   const catStyle = CATEGORY_STYLES[category] || CATEGORY_STYLES['Misc'];
 
-  const date = posted_at
-    ? new Date(posted_at).toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
-    : null;
+  const date = formatDate(posted_at);
 
   const tagMap = tags || {};
   const nsKeys = [
@@ -125,7 +122,7 @@ function ListRow({ gallery, onTagSearch, translate, onGroupClick }) {
         className="shrink-0"
       >
         <img
-          src={thumb ? `/v1/thumbs/${gid}` : FALLBACK_IMAGE}
+          src={thumb ? getThumbUrl(gid) : FALLBACK_IMAGE}
           alt={title}
           onError={(e) => { e.target.onerror = null; e.target.src = FALLBACK_IMAGE; }}
           width={140}
@@ -153,7 +150,7 @@ function ListRow({ gallery, onTagSearch, translate, onGroupClick }) {
             target={LINK_TARGET}
             rel="noopener noreferrer"
             className="shrink-0 p-1.5 -mr-1.5 text-gray-500 hover:text-white transition-colors rounded-lg hover:bg-white/10"
-            aria-label="在 ExHentai 打开"
+            aria-label={t('card.openEx')}
           >
             <ExternalLink size={14} />
           </a>
@@ -200,9 +197,9 @@ function ListRow({ gallery, onTagSearch, translate, onGroupClick }) {
               type="button"
               onClick={(e) => { e.stopPropagation(); onGroupClick?.(gallery.group_id); }}
               className="flex items-center gap-0.5 text-amber-400 hover:text-amber-300 cursor-pointer"
-              aria-label={`查看 ${gallery.group_count} 个版本`}
+              aria-label={t('card.viewVersions', { count: gallery.group_count })}
             >
-              <Layers size={10} />{gallery.group_count}版本
+              <Layers size={10} />{t('card.versionsLabel', { count: gallery.group_count })}
             </button>
           )}
         </div>

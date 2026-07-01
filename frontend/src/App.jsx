@@ -6,17 +6,18 @@ import AdminPage from './pages/AdminPage';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { BrowserRouter, NavLink, Route, Routes, Link } from 'react-router-dom';
 import { Heart, LayoutGrid, Sparkles } from 'lucide-react';
+import { t } from './shared/i18n';
 
 function NotFoundPage() {
   return (
     <div className="flex flex-col items-center justify-center py-24 text-center">
       <p className="text-6xl font-bold text-gray-700 mb-2">404</p>
-      <p className="text-sm text-gray-500 mb-4">页面不存在</p>
+      <p className="text-sm text-gray-500 mb-4">{t('notFound.subtitle')}</p>
       <Link
         to="/"
         className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium transition-colors"
       >
-        返回首页
+        {t('notFound.back')}
       </Link>
     </div>
   );

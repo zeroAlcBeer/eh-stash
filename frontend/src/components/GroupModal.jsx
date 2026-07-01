@@ -1,7 +1,8 @@
 import React, { useEffect, useReducer, useRef } from 'react';
 import { X, Star, Heart, FileText, Globe, Calendar, ExternalLink } from 'lucide-react';
 import { fetchGalleryGroup } from '../api';
-import { getExUrl, LINK_TARGET, CATEGORY_STYLES, FALLBACK_IMAGE } from '../shared/gallery';
+import { getExUrl, LINK_TARGET, CATEGORY_STYLES, FALLBACK_IMAGE, getThumbUrl } from '../shared/gallery';
+import { t, formatDate } from '../shared/i18n';
 
 const initialState = { galleries: [], loading: true };
 
@@ -46,19 +47,19 @@ export default function GroupModal({ groupId, onClose }) {
       ref={dialogRef}
       onClose={onClose}
       onClick={handleBackdropClick}
-      aria-label={loading ? '加载中' : `${galleries.length} 个版本`}
+      aria-label={loading ? t('loading') : t('group.versions', { count: galleries.length })}
       className="m-auto rounded-lg ring-1 ring-white/10 w-full max-w-[calc(100%-2rem)] sm:max-w-2xl max-h-[80vh] overflow-y-auto p-0 bg-zinc-900 text-white"
     >
       {/* Header */}
       <div className="sticky top-0 bg-zinc-900 border-b border-white/10 px-4 py-3 flex items-center justify-between">
         <span className="text-sm font-medium text-gray-200">
-          {loading ? '加载中...' : `${galleries.length} 个版本`}
+          {loading ? t('loading') : t('group.versions', { count: galleries.length })}
         </span>
         <button
           type="button"
           onClick={onClose}
           className="p-2 -mr-1 text-gray-500 hover:text-white rounded-lg hover:bg-white/10 transition-colors"
-          aria-label="关闭"
+          aria-label={t('group.close')}
         >
           <X size={18} />
         </button>
@@ -69,9 +70,7 @@ export default function GroupModal({ groupId, onClose }) {
         {galleries.map((g) => {
           const exUrl = getExUrl(g.gid, g.token);
           const catStyle = CATEGORY_STYLES[g.category] || CATEGORY_STYLES['Misc'];
-          const date = g.posted_at
-            ? new Date(g.posted_at).toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
-            : null;
+          const date = formatDate(g.posted_at);
           const displayTitle = g.title_jpn || g.title;
 
           return (
@@ -84,7 +83,7 @@ export default function GroupModal({ groupId, onClose }) {
             >
               {/* Thumbnail */}
               <img
-                src={g.thumb ? `/v1/thumbs/${g.gid}` : FALLBACK_IMAGE}
+                src={g.thumb ? getThumbUrl(g.gid) : FALLBACK_IMAGE}
                 alt={displayTitle}
                 width={60}
                 height={84}
