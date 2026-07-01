@@ -1,11 +1,16 @@
 import React, { useState, useRef, useMemo, useId } from 'react';
 import { Search, X, ChevronDown, ChevronUp, SlidersHorizontal } from 'lucide-react';
 import { t } from '../shared/i18n';
+import { IS_PUBLIC } from '../shared/mode';
+import { useAllowCosplay } from '../shared/settings';
 
-const CATEGORIES = [
+// Self-hosted: full category list. Public: curated subset, Cosplay gated
+// behind the allow_cosplay settings toggle.
+const SELF_HOSTED_CATEGORIES = [
   'Manga', 'Doujinshi', 'Cosplay', 'Asian Porn',
   'Non-H', 'Western', 'Image Set', 'Game CG', 'Artist CG', 'Misc',
 ];
+const BASE_CATEGORIES = ['Manga', 'Doujinshi', 'Image Set', 'Misc'];
 
 const MIN_FAV_OPTIONS = [
   { value: 0, label: 'All' },
@@ -44,6 +49,14 @@ const FilterPanel = ({ filters, onChange, tagSuggestions = EMPTY_TAGS }) => {
   const listboxId = useId();
 
   const tags = filters.tags || EMPTY_TAGS;
+
+  const [allowCosplay] = useAllowCosplay();
+  const categories = useMemo(
+    () => IS_PUBLIC
+      ? (allowCosplay ? [...BASE_CATEGORIES, 'Cosplay'] : BASE_CATEGORIES)
+      : SELF_HOSTED_CATEGORIES,
+    [allowCosplay],
+  );
 
   const filteredSuggestions = useMemo(() => {
     const keyword = tagInput.trim().toLowerCase();
@@ -127,7 +140,7 @@ const FilterPanel = ({ filters, onChange, tagSuggestions = EMPTY_TAGS }) => {
             <label htmlFor="filter-category" className="text-xs font-medium text-gray-500 uppercase tracking-wider">Category</label>
             <SelectField id="filter-category" value={filters.category || ''} onChange={set('category')} className="w-32">
               <option value="" className="bg-zinc-900">All</option>
-              {CATEGORIES.map((c) => (
+              {categories.map((c) => (
                 <option key={c} value={c} className="bg-zinc-900">{c}</option>
               ))}
             </SelectField>

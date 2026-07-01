@@ -3,6 +3,7 @@ import { Star, Heart, MessageCircle, ExternalLink, FileText, Globe, User, Calend
 import TagBadge from './TagBadge';
 import { getExUrl, LINK_TARGET, CATEGORY_STYLES, FALLBACK_IMAGE, getThumbUrl } from '../shared/gallery';
 import { t, formatDate } from '../shared/i18n';
+import { IS_PUBLIC } from '../shared/mode';
 
 const NS_ORDER = ['artist', 'group', 'parody', 'character', 'female', 'male', 'language', 'misc'];
 
@@ -29,7 +30,7 @@ function GridCard({ gallery, onGroupClick }) {
       target={LINK_TARGET}
       rel="noopener noreferrer"
       onClick={handleClick}
-      className={`group flex flex-col rounded-lg overflow-hidden bg-zinc-900 transition-all duration-150 ${gallery.is_favorited ? 'ring-2 ring-rose-500/70 hover:ring-rose-400' : 'ring-1 ring-white/5 hover:ring-amber-400/60'}`}
+      className={`group flex flex-col rounded-lg overflow-hidden bg-zinc-900 transition-all duration-150 ${!IS_PUBLIC && gallery.is_favorited ? 'ring-2 ring-rose-500/70 hover:ring-rose-400' : 'ring-1 ring-white/5 hover:ring-amber-400/60'}`}
       title={displayTitle}
     >
       {/* Cover */}
@@ -57,8 +58,8 @@ function GridCard({ gallery, onGroupClick }) {
             </span>
           )}
         </div>
-        {/* Favorites badge — corner ribbon */}
-        {gallery.is_favorited && (
+        {/* Favorites badge — corner ribbon (self-hosted only) */}
+        {!IS_PUBLIC && gallery.is_favorited && (
           <>
             <div className="absolute top-0 left-0 w-0 h-0 border-t-[36px] border-r-[36px] border-t-rose-500/80 border-r-transparent" />
             <Heart size={12} className="absolute top-1 left-1 fill-white text-white drop-shadow" aria-hidden="true" />
@@ -142,7 +143,7 @@ function ListRow({ gallery, onTagSearch, translate, onGroupClick }) {
             rel="noopener noreferrer"
             className="text-sm font-medium text-gray-200 hover:text-white line-clamp-2 leading-snug"
           >
-            {gallery.is_favorited && <Heart size={12} className="inline fill-rose-400 text-rose-400 mr-1 -mt-0.5" aria-hidden="true" />}
+            {!IS_PUBLIC && gallery.is_favorited && <Heart size={12} className="inline fill-rose-400 text-rose-400 mr-1 -mt-0.5" aria-hidden="true" />}
             {displayTitle}
           </a>
           <a

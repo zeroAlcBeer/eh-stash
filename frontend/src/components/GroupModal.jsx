@@ -3,6 +3,7 @@ import { X, Star, Heart, FileText, Globe, Calendar, ExternalLink } from 'lucide-
 import { fetchGalleryGroup } from '../api';
 import { getExUrl, LINK_TARGET, CATEGORY_STYLES, FALLBACK_IMAGE, getThumbUrl } from '../shared/gallery';
 import { t, formatDate } from '../shared/i18n';
+import { IS_PUBLIC } from '../shared/mode';
 
 const initialState = { galleries: [], loading: true };
 
@@ -93,7 +94,7 @@ export default function GroupModal({ groupId, onClose }) {
               {/* Info */}
               <div className="flex-1 min-w-0 flex flex-col gap-1">
                 <p className="text-sm text-gray-200 line-clamp-2 leading-snug font-medium">
-                  {g.is_favorited && <Heart size={12} className="inline fill-rose-400 text-rose-400 mr-1 -mt-0.5" />}
+                  {!IS_PUBLIC && g.is_favorited && <Heart size={12} className="inline fill-rose-400 text-rose-400 mr-1 -mt-0.5" />}
                   {displayTitle}
                 </p>
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500">
