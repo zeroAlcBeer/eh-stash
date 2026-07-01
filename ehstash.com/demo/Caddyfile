@@ -1,0 +1,14 @@
+# Local R2 stand-in. Production R2 returns `Content-Type: image/jpeg`
+# because the rclone upload script sets that header on every object;
+# this mirrors that behaviour so the frontend behaves identically.
+
+:80 {
+    root * /srv
+    file_server browse
+
+    header {
+        Content-Type image/jpeg
+        Cache-Control "public, max-age=604800"
+        Access-Control-Allow-Origin *
+    }
+}

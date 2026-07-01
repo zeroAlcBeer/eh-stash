@@ -1,0 +1,31 @@
+name: ehstash-demo
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: eh_stash
+    ports:
+      - "5433:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d eh_stash"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  thumbs:
+    image: caddy:2-alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./thumbs:/srv:ro
+    depends_on:
+      - postgres
+
+volumes:
+  pg_data:
