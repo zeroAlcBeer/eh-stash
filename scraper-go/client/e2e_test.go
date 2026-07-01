@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/CheerChen/eh-stash/scraper-go/parser"
-	"github.com/CheerChen/eh-stash/scraper-go/ratelimit"
+	"github.com/zeroAlcBeer/eh-stash/scraper-go/parser"
+	"github.com/zeroAlcBeer/eh-stash/scraper-go/ratelimit"
 )
 
 func TestE2EListAndParse(t *testing.T) {

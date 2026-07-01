@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/CheerChen/eh-stash/scraper-go/config"
-	"github.com/CheerChen/eh-stash/scraper-go/ratelimit"
+	"github.com/zeroAlcBeer/eh-stash/scraper-go/config"
+	"github.com/zeroAlcBeer/eh-stash/scraper-go/ratelimit"
 )
 
 var gidTokenRE = regexp.MustCompile(`/g/(\d+)/([a-f0-9]+)/`)

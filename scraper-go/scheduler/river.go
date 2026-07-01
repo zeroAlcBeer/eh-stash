@@ -13,9 +13,9 @@ import (
 	"github.com/riverqueue/river/rivermigrate"
 	"github.com/riverqueue/river/rivertype"
 
-	"github.com/CheerChen/eh-stash/scraper-go/db"
-	"github.com/CheerChen/eh-stash/scraper-go/task"
-	"github.com/CheerChen/eh-stash/scraper-go/worker"
+	"github.com/zeroAlcBeer/eh-stash/scraper-go/db"
+	"github.com/zeroAlcBeer/eh-stash/scraper-go/task"
+	"github.com/zeroAlcBeer/eh-stash/scraper-go/worker"
 )
 
 const (

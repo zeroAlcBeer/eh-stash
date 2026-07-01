@@ -6,11 +6,11 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
 
-	"github.com/CheerChen/eh-stash/scraper-go/client"
-	"github.com/CheerChen/eh-stash/scraper-go/config"
-	"github.com/CheerChen/eh-stash/scraper-go/db"
-	"github.com/CheerChen/eh-stash/scraper-go/egress"
-	"github.com/CheerChen/eh-stash/scraper-go/ratelimit"
+	"github.com/zeroAlcBeer/eh-stash/scraper-go/client"
+	"github.com/zeroAlcBeer/eh-stash/scraper-go/config"
+	"github.com/zeroAlcBeer/eh-stash/scraper-go/db"
+	"github.com/zeroAlcBeer/eh-stash/scraper-go/egress"
+	"github.com/zeroAlcBeer/eh-stash/scraper-go/ratelimit"
 )
 
 // Signals holds channels for inter-component communication.

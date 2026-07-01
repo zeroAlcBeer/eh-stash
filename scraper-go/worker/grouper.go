@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/CheerChen/eh-stash/scraper-go/db"
+	"github.com/zeroAlcBeer/eh-stash/scraper-go/db"
 )
 
 const grouperIdleInterval = 60 * time.Second

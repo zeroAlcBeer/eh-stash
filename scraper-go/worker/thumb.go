@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/CheerChen/eh-stash/scraper-go/client"
-	"github.com/CheerChen/eh-stash/scraper-go/config"
-	"github.com/CheerChen/eh-stash/scraper-go/db"
-	"github.com/CheerChen/eh-stash/scraper-go/ratelimit"
+	"github.com/zeroAlcBeer/eh-stash/scraper-go/client"
+	"github.com/zeroAlcBeer/eh-stash/scraper-go/config"
+	"github.com/zeroAlcBeer/eh-stash/scraper-go/db"
+	"github.com/zeroAlcBeer/eh-stash/scraper-go/ratelimit"
 )
 
 const (

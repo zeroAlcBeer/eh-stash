@@ -11,7 +11,7 @@ against the same list, serially. Reports success rate, p50/p95/max
 latency, total elapsed.
 
 Run:
-  cd /Users/cheerchen/Documents/CheerChen/eh-stash
+  cd /Users/zeroalcbeer/Documents/zeroAlcBeer/eh-stash
   python3 demo/thumb_fetch_bench.py
 """
 

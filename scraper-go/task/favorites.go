@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/CheerChen/eh-stash/scraper-go/client"
-	"github.com/CheerChen/eh-stash/scraper-go/config"
-	"github.com/CheerChen/eh-stash/scraper-go/db"
-	"github.com/CheerChen/eh-stash/scraper-go/parser"
+	"github.com/zeroAlcBeer/eh-stash/scraper-go/client"
+	"github.com/zeroAlcBeer/eh-stash/scraper-go/config"
+	"github.com/zeroAlcBeer/eh-stash/scraper-go/db"
+	"github.com/zeroAlcBeer/eh-stash/scraper-go/parser"
 )
 
 // RunFavoritesOnce runs one round of the favorites sync task. Stop is signaled

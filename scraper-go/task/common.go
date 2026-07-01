@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/CheerChen/eh-stash/scraper-go/db"
-	"github.com/CheerChen/eh-stash/scraper-go/parser"
+	"github.com/zeroAlcBeer/eh-stash/scraper-go/db"
+	"github.com/zeroAlcBeer/eh-stash/scraper-go/parser"
 )
 
 var (

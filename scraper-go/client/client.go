@@ -16,9 +16,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/CheerChen/eh-stash/scraper-go/config"
-	"github.com/CheerChen/eh-stash/scraper-go/egress"
-	"github.com/CheerChen/eh-stash/scraper-go/ratelimit"
+	"github.com/zeroAlcBeer/eh-stash/scraper-go/config"
+	"github.com/zeroAlcBeer/eh-stash/scraper-go/egress"
+	"github.com/zeroAlcBeer/eh-stash/scraper-go/ratelimit"
 	utls "github.com/refraction-networking/utls"
 )
 

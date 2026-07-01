@@ -1,4 +1,4 @@
-module github.com/CheerChen/eh-stash/scraper-go
+module github.com/zeroAlcBeer/eh-stash/scraper-go
 
 go 1.25.0
 

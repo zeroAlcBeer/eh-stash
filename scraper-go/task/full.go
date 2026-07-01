@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/CheerChen/eh-stash/scraper-go/client"
-	"github.com/CheerChen/eh-stash/scraper-go/db"
-	"github.com/CheerChen/eh-stash/scraper-go/parser"
+	"github.com/zeroAlcBeer/eh-stash/scraper-go/client"
+	"github.com/zeroAlcBeer/eh-stash/scraper-go/db"
+	"github.com/zeroAlcBeer/eh-stash/scraper-go/parser"
 )
 
 // RunFullOnce runs one iteration of the full sync task. Returns (done, error);
