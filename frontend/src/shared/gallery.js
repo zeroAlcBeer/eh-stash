@@ -1,4 +1,4 @@
-const isAndroid = /Android/i.test(navigator.userAgent);
+const isAndroid = typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent);
 
 export function getExUrl(gid, token) {
   const https = `https://exhentai.org/g/${gid}/${token}/`;
@@ -25,3 +25,13 @@ export const CATEGORY_STYLES = {
 };
 
 export const FALLBACK_IMAGE = `data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='280' viewBox='0 0 200 280'><rect width='200' height='280' fill='%2327272a'/><text x='100' y='145' font-family='sans-serif' font-size='13' fill='%2352525b' text-anchor='middle'>No Cover</text></svg>`;
+
+// Thumbnail URL resolver.
+// Public mode (ehstash.com): thumbs served from R2 CDN via VITE_THUMB_BASE_URL.
+// Self-hosted mode: thumbs served from the same-origin API at /v1/thumbs/{gid}.
+const THUMB_BASE = (import.meta.env.VITE_THUMB_BASE_URL || '').replace(/\/$/, '');
+
+export function getThumbUrl(gid) {
+  if (!THUMB_BASE) return `/v1/thumbs/${gid}`;
+  return `${THUMB_BASE}/${gid}`;
+}
