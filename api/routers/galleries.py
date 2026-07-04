@@ -88,6 +88,11 @@ def _get_recommended(*, db, category, language, min_rating, min_fav, tag, is_fav
     where_parts.append("rc.similarity >= %s")
     params.append(threshold)
     where_parts.append("g.is_active = TRUE")
+    # Hide galleries that have a newer version (parent_gid is set on the
+    # older, replaced version). parent_gid is only populated after a detail
+    # fetch, so galleries whose detail hasn't been scraped yet (NULL) remain
+    # visible — only confirmed old versions are filtered out.
+    where_parts.append("g.parent_gid IS NULL")
 
     if is_favorited is True:
         where_parts.append("(f.gid IS NOT NULL OR gf.group_id IS NOT NULL)")
@@ -164,6 +169,8 @@ def get_galleries(
     # Standard query with LEFT JOIN for favorites info
     where_parts, params = _build_where(category, language, min_rating, min_fav, tag)
     where_parts.append("g.is_active = TRUE")
+    # See _get_recommended for the parent_gid filter rationale.
+    where_parts.append("g.parent_gid IS NULL")
 
     if is_favorited is True:
         where_parts.append("f.gid IS NOT NULL")
@@ -231,7 +238,7 @@ def get_gallery_group(group_id: int, db = Depends(get_db)):
         FROM gallery_group_members ggm
         JOIN eh_galleries g ON g.gid = ggm.gid
         LEFT JOIN user_favorites f ON g.gid = f.gid
-        WHERE ggm.group_id = %s AND g.is_active = TRUE
+        WHERE ggm.group_id = %s AND g.is_active = TRUE AND g.parent_gid IS NULL
         ORDER BY g.posted_at ASC
         """,
         (group_id,),
