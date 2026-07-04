@@ -93,7 +93,7 @@ export default function GroupModal({ groupId, onClose }) {
               />
               {/* Info */}
               <div className="flex-1 min-w-0 flex flex-col gap-1">
-                <p className="text-sm text-gray-200 line-clamp-2 leading-snug font-medium">
+                <p className={`text-sm text-gray-200 line-clamp-2 leading-snug font-medium ${g.is_expunged ? 'line-through text-gray-500' : ''}`}>
                   {!IS_PUBLIC && g.is_favorited && <Heart size={12} className="inline fill-rose-400 text-rose-400 mr-1 -mt-0.5" />}
                   {displayTitle}
                 </p>

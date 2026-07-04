@@ -30,7 +30,7 @@ function GridCard({ gallery, onGroupClick }) {
       target={LINK_TARGET}
       rel="noopener noreferrer"
       onClick={handleClick}
-      className={`group flex flex-col rounded-lg overflow-hidden bg-zinc-900 transition-all duration-150 ${!IS_PUBLIC && gallery.is_favorited ? 'ring-2 ring-rose-500/70 hover:ring-rose-400' : 'ring-1 ring-white/5 hover:ring-amber-400/60'}`}
+      className={`group flex flex-col rounded-lg overflow-hidden bg-zinc-900 transition-all duration-150 ${gallery.is_expunged ? 'opacity-40 hover:opacity-70 ' : ''}${!IS_PUBLIC && gallery.is_favorited ? 'ring-2 ring-rose-500/70 hover:ring-rose-400' : 'ring-1 ring-white/5 hover:ring-amber-400/60'}`}
       title={displayTitle}
     >
       {/* Cover */}
@@ -114,7 +114,7 @@ function ListRow({ gallery, onTagSearch, translate, onGroupClick }) {
   ];
 
   return (
-    <div className="flex gap-3 rounded-lg bg-zinc-900 ring-1 ring-white/5 hover:ring-white/10 transition-all p-2.5">
+    <div className={`flex gap-3 rounded-lg bg-zinc-900 ring-1 ring-white/5 hover:ring-white/10 transition-all p-2.5 ${gallery.is_expunged ? 'opacity-40 hover:opacity-70' : ''}`}>
       {/* Thumbnail */}
       <a
         href={exUrl}

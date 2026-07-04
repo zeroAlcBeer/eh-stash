@@ -32,6 +32,14 @@ class Gallery(BaseModel):
     similarity: Optional[float] = None
     group_id: Optional[int] = None
     group_count: Optional[int] = None
+    # 006_detail_extras columns — nullable so old-style rows stay NULL.
+    file_size: Optional[str] = None
+    file_size_bytes: Optional[int] = None
+    rating_count: Optional[int] = None
+    visible: Optional[str] = None
+    parent_gid: Optional[int] = None
+    torrent_count: Optional[int] = 0
+    is_expunged: bool = False
 
 class GalleryList(BaseModel):
     items: List[Gallery]
