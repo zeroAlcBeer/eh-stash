@@ -357,12 +357,8 @@ func parseCategories(cfg map[string]any) []string {
 }
 
 func shouldRefreshFromList(existing map[string]any, item *parser.GalleryListItem, threshold float64) bool {
-	// Force refresh for old-style detail rows that predate 006_detail_extras.
-	// file_size IS NULL means the row was written by the old parser and is
-	// missing file_size / rating_count / visible / parent_gid / torrent_count.
-	if fileSize, ok := existing["file_size"].(*string); ok && fileSize == nil {
-		return true
-	}
+	// file_size IS NULL backfill is handled by the refresh_detail task;
+	// incremental only checks for tag/rating drift on already-complete rows.
 
 	existingTags, _ := existing["tags"].(map[string][]string)
 	detailTags := flattenTags(existingTags)

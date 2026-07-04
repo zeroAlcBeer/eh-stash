@@ -568,3 +568,51 @@ func (d *DB) GetGalleryByGID(ctx context.Context, gid int64) (map[string]any, er
 	result["tags"] = tags
 	return result, nil
 }
+
+// RefreshCandidate is a gallery that needs detail re-fetch to populate
+// the 006_detail_extras columns (file_size, rating_count, visible, etc.).
+type RefreshCandidate struct {
+	GID      int64
+	Token    string
+	FavCount int
+}
+
+// GetGalleriesNeedingRefresh returns up to limit active galleries where
+// file_size IS NULL, ordered by fav_count DESC (highest value first).
+// offset is used for pagination across batches.
+func (d *DB) GetGalleriesNeedingRefresh(ctx context.Context, minFav int, limit int, offset int) ([]RefreshCandidate, error) {
+	rows, err := d.pool.Query(ctx,
+		`SELECT gid, token, fav_count
+		 FROM eh_galleries
+		 WHERE file_size IS NULL
+		   AND is_active = true
+		   AND fav_count >= $1
+		 ORDER BY fav_count DESC, gid DESC
+		 LIMIT $2 OFFSET $3`,
+		minFav, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []RefreshCandidate
+	for rows.Next() {
+		var c RefreshCandidate
+		if err := rows.Scan(&c.GID, &c.Token, &c.FavCount); err != nil {
+			return nil, err
+		}
+		result = append(result, c)
+	}
+	return result, rows.Err()
+}
+
+// CountGalleriesNeedingRefresh counts active galleries with file_size IS NULL
+// and fav_count >= minFav. Used for progress reporting.
+func (d *DB) CountGalleriesNeedingRefresh(ctx context.Context, minFav int) (int, error) {
+	var count int
+	err := d.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM eh_galleries
+		 WHERE file_size IS NULL AND is_active = true AND fav_count >= $1`,
+		minFav).Scan(&count)
+	return count, err
+}

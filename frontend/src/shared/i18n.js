@@ -188,6 +188,7 @@ const T = {
   'admin.task.nameRequired':     { 'zh-CN': '名称不能为空', 'zh-TW': '名稱不能為空', en: 'Name is required' },
   'admin.task.oneIncremental':   { 'zh-CN': '仅允许创建一个 gallery incremental sync', 'zh-TW': '僅允許建立一個 gallery incremental sync', en: 'Only one gallery incremental sync is allowed' },
   'admin.task.oneFavorites':     { 'zh-CN': '仅允许创建一个 favorites source sync', 'zh-TW': '僅允許建立一個 favorites source sync', en: 'Only one favorites source sync is allowed' },
+  'admin.task.oneRefreshDetail': { 'zh-CN': '仅允许创建一个 refresh_detail 任务', 'zh-TW': '僅允許建立一個 refresh_detail 任務', en: 'Only one refresh_detail task is allowed' },
   'admin.task.minOneCategory':   { 'zh-CN': 'incremental 至少选择一个分类', 'zh-TW': 'incremental 至少選擇一個分類', en: 'Select at least one category for incremental' },
   'admin.task.createFailed':     { 'zh-CN': '创建任务失败', 'zh-TW': '建立任務失敗', en: 'Failed to create task' },
   'admin.task.createTitle':      { 'zh-CN': '新建同步任务', 'zh-TW': '新建同步任務', en: 'New Sync Task' },
@@ -202,6 +203,10 @@ const T = {
   'admin.task.intervalHours':    { 'zh-CN': 'run_interval_hours (同步间隔/小时)', 'zh-TW': 'run_interval_hours (同步間隔/小時)', en: 'run_interval_hours (sync interval/hrs)' },
   'admin.task.existsIncremental':{ 'zh-CN': '已存在 gallery incremental sync。系统仅允许一个。', 'zh-TW': '已存在 gallery incremental sync。系統僅允許一個。', en: 'A gallery incremental sync already exists. Only one is allowed.' },
   'admin.task.existsFavorites':  { 'zh-CN': '已存在 favorites source sync。系统仅允许一个。', 'zh-TW': '已存在 favorites source sync。系統僅允許一個。', en: 'A favorites source sync already exists. Only one is allowed.' },
+  'admin.task.existsRefreshDetail': { 'zh-CN': '已存在 refresh_detail 任务。系统仅允许一个。', 'zh-TW': '已存在 refresh_detail 任務。系統僅允許一個。', en: 'A refresh_detail task already exists. Only one is allowed.' },
+  'admin.task.batchSize':        { 'zh-CN': 'batch_size (每批抓取数量)', 'zh-TW': 'batch_size (每批抓取數量)', en: 'batch_size (items per batch)' },
+  'admin.task.minFav':           { 'zh-CN': 'min_fav (最低收藏数阈值)', 'zh-TW': 'min_fav (最低收藏數閾值)', en: 'min_fav (minimum favorite count threshold)' },
+  'admin.task.refreshHint':      { 'zh-CN': '按 fav_count 降序回填缺少 detail 字段的旧画廊，每 5 分钟自动触发一批。', 'zh-TW': '按 fav_count 降序回填缺少 detail 欄位的舊畫廊，每 5 分鐘自動觸發一批。', en: 'Backfills missing detail fields for old galleries by fav_count DESC. Auto-triggers a batch every 5 minutes.' },
   'admin.task.cancel':           { 'zh-CN': '取消', 'zh-TW': '取消', en: 'Cancel' },
   'admin.task.create':           { 'zh-CN': '创建任务', 'zh-TW': '建立任務', en: 'Create Task' },
 

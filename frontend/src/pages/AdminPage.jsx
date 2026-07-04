@@ -40,6 +40,7 @@ const CATEGORY_OPTIONS = [
   'Image Set', 'Cosplay', 'Asian Porn', 'Non-H', 'Western',
 ];
 const MIXED_CATEGORY = 'Mixed';
+const REFRESH_CATEGORY = 'Refresh Detail';
 const DEFAULT_INCREMENTAL_CATEGORIES = ['Doujinshi', 'Manga', 'Cosplay'];
 
 const DEFAULT_FULL = { start_gid: '' };
@@ -49,6 +50,7 @@ const DEFAULT_INCREMENTAL = {
   rating_diff_threshold: 0.5,
 };
 const DEFAULT_FAVORITES = { run_interval_hours: 6 };
+const DEFAULT_REFRESH = { batch_size: 25, min_fav: 0 };
 const ACTIVE_JOB_STATES = ['available', 'pending', 'scheduled', 'running', 'retryable'];
 const RETRYABLE_TERMINAL_STATES = ['cancelled', 'discarded', 'completed'];
 const ADMIN_TABS = [
@@ -59,6 +61,7 @@ const ADMIN_TABS = [
 
 function getDefaultConfig(type) {
   if (type === 'favorites') return { ...DEFAULT_FAVORITES };
+  if (type === 'refresh_detail') return { ...DEFAULT_REFRESH };
   return type === 'full' ? { ...DEFAULT_FULL } : { ...DEFAULT_INCREMENTAL };
 }
 
@@ -77,6 +80,17 @@ function buildPayload(form) {
       type: 'favorites',
       category: 'Favorites',
       config: { run_interval_hours: Number(form.config.run_interval_hours || 6) },
+    };
+  }
+  if (form.type === 'refresh_detail') {
+    return {
+      name: form.name.trim(),
+      type: 'refresh_detail',
+      category: REFRESH_CATEGORY,
+      config: {
+        batch_size: Number(form.config.batch_size || 25),
+        min_fav: Number(form.config.min_fav || 0),
+      },
     };
   }
   return {
@@ -98,11 +112,13 @@ function isTransitioning(task) {
 function formatTaskKind(value) {
   if (value === 'gallery_sync') return 'Gallery Sync';
   if (value === 'favorites_sync') return 'Favorites Sync';
+  if (value === 'refresh_detail') return 'Refresh Detail';
   return value || 'Sync Task';
 }
 
 function formatTaskScope(task) {
   if (task.source === 'favorites') return 'source: favorites · scope: user_favorites';
+  if (task.source === 'refresh_detail') return 'source: refresh_detail · scope: stale_detail_rows';
   if (task.strategy === 'incremental') {
     const categories = Array.isArray(task.scope?.categories)
       ? task.scope.categories
@@ -129,6 +145,7 @@ function formatJobKind(value) {
   if (value === 'ehstash_incremental_slice') return 'incremental slice';
   if (value === 'ehstash_full_sync') return 'full sync';
   if (value === 'ehstash_favorites_sync') return 'favorites sync';
+  if (value === 'ehstash_refresh_detail') return 'refresh detail';
   return value || 'none';
 }
 
@@ -668,6 +685,7 @@ function CreateTaskModal({ onClose, onCreated, tasks }) {
     task.source === 'gallery_list' && task.strategy === 'incremental'
   ) || task.type === 'incremental');
   const hasFavoritesSource = (tasks || []).some((task) => task.source === 'favorites' || task.type === 'favorites');
+  const hasRefreshDetailSource = (tasks || []).some((task) => task.source === 'refresh_detail' || task.type === 'refresh_detail');
 
   const handleClose = useCallback(() => {
     if (!busy) onClose();
@@ -700,7 +718,9 @@ function CreateTaskModal({ onClose, onCreated, tasks }) {
         ? (CATEGORY_OPTIONS.includes(prev.category) ? prev.category : 'Cosplay')
         : nextType === 'favorites'
           ? 'Favorites'
-          : MIXED_CATEGORY,
+          : nextType === 'refresh_detail'
+            ? REFRESH_CATEGORY
+            : MIXED_CATEGORY,
       config: getDefaultConfig(nextType),
     }));
   };
@@ -725,6 +745,10 @@ function CreateTaskModal({ onClose, onCreated, tasks }) {
     }
     if (form.type === 'favorites' && hasFavoritesSource) {
       setErrorMsg(t('admin.task.oneFavorites'));
+      return;
+    }
+    if (form.type === 'refresh_detail' && hasRefreshDetailSource) {
+      setErrorMsg(t('admin.task.oneRefreshDetail'));
       return;
     }
     if (form.type === 'incremental' && (!Array.isArray(form.config.categories) || form.config.categories.length === 0)) {
@@ -781,6 +805,7 @@ function CreateTaskModal({ onClose, onCreated, tasks }) {
               { label: 'Gallery Full Scan', value: 'full' },
               { label: 'Gallery Incremental Sync', value: 'incremental' },
               { label: 'Favorites Source Sync', value: 'favorites' },
+              { label: 'Refresh Detail (Backfill)', value: 'refresh_detail' },
             ]}
           />
           {form.type === 'full' ? (
@@ -835,6 +860,26 @@ function CreateTaskModal({ onClose, onCreated, tasks }) {
                 value={form.config.run_interval_hours}
                 onChange={(e) => setForm((p) => ({ ...p, config: { ...p.config, run_interval_hours: e.target.value } }))}
               />
+            ) : form.type === 'refresh_detail' ? (
+              <>
+                <InputField
+                  id="config-batch-size"
+                  label={t('admin.task.batchSize')}
+                  type="number"
+                  step="1"
+                  value={form.config.batch_size}
+                  onChange={(e) => setForm((p) => ({ ...p, config: { ...p.config, batch_size: e.target.value } }))}
+                />
+                <InputField
+                  id="config-min-fav"
+                  label={t('admin.task.minFav')}
+                  type="number"
+                  step="1"
+                  value={form.config.min_fav}
+                  onChange={(e) => setForm((p) => ({ ...p, config: { ...p.config, min_fav: e.target.value } }))}
+                />
+                <p className="text-xs text-gray-500">{t('admin.task.refreshHint')}</p>
+              </>
             ) : (
               <>
                 <InputField
@@ -865,6 +910,11 @@ function CreateTaskModal({ onClose, onCreated, tasks }) {
               {t('admin.task.existsFavorites')}
             </div>
           )}
+          {form.type === 'refresh_detail' && hasRefreshDetailSource && (
+            <div role="alert" className="rounded-lg bg-amber-500/10 border border-amber-500/30 px-3 py-2 text-sm text-amber-300">
+              {t('admin.task.existsRefreshDetail')}
+            </div>
+          )}
 
           {errorMsg && (
             <div role="alert" className="rounded-lg bg-rose-500/10 border border-rose-500/30 px-3 py-2 text-sm text-rose-400">
@@ -885,7 +935,7 @@ function CreateTaskModal({ onClose, onCreated, tasks }) {
           <button
             type="submit"
             onClick={handleSubmit}
-            disabled={busy || (form.type === 'incremental' && hasIncrementalTask) || (form.type === 'favorites' && hasFavoritesSource)}
+            disabled={busy || (form.type === 'incremental' && hasIncrementalTask) || (form.type === 'favorites' && hasFavoritesSource) || (form.type === 'refresh_detail' && hasRefreshDetailSource)}
             className="px-4 py-2 text-sm rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium transition-all disabled:opacity-50 flex items-center gap-2"
           >
             {busy && <Loader2 size={14} className="animate-spin" />}

@@ -8,6 +8,7 @@ VALID_CATEGORIES = [
 ]
 MIXED_CATEGORY = "Mixed"
 FAVORITES_CATEGORY = "Favorites"
+REFRESH_CATEGORY = "Refresh Detail"
 
 class Gallery(BaseModel):
     gid: int
@@ -47,7 +48,7 @@ class Stats(BaseModel):
 
 class SyncTaskCreate(BaseModel):
     name: str
-    type: Literal["full", "incremental", "favorites"]
+    type: Literal["full", "incremental", "favorites", "refresh_detail"]
     category: str
     config: Dict[str, Any] = Field(default_factory=dict)
 
@@ -63,6 +64,11 @@ class SyncTaskCreate(BaseModel):
         if self.type == "favorites":
             if self.category != FAVORITES_CATEGORY:
                 raise ValueError(f"Favorites task category must be '{FAVORITES_CATEGORY}'")
+            return self
+
+        if self.type == "refresh_detail":
+            if self.category != REFRESH_CATEGORY:
+                raise ValueError(f"refresh_detail task category must be '{REFRESH_CATEGORY}'")
             return self
 
         if self.category != MIXED_CATEGORY:

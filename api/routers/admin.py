@@ -12,6 +12,7 @@ from models import (
     EmbeddingsStatus,
     FAVORITES_CATEGORY,
     MIXED_CATEGORY,
+    REFRESH_CATEGORY,
     SimilarityDistribution,
     SyncTask,
     SyncTaskCreate,
@@ -36,6 +37,11 @@ DEFAULT_INCREMENTAL_CONFIG = {
 
 DEFAULT_FAVORITES_CONFIG = {
     "run_interval_hours": 6,
+}
+
+DEFAULT_REFRESH_CONFIG = {
+    "batch_size": 25,
+    "min_fav": 0,
 }
 
 TASK_DEF_BASE_SELECT = """
@@ -114,6 +120,12 @@ def _init_state(task_type: str, cfg: Dict[str, Any]) -> Dict[str, Any]:
         }
     if task_type == "favorites":
         return {"round": 0}
+    if task_type == "refresh_detail":
+        return {
+            "offset": 0,
+            "total_done": 0,
+            "total_pending": None,
+        }
     return {
         "next_gid": None,
         "round": 0,
@@ -134,6 +146,18 @@ def _normalize_config(task_type: str, config: Dict[str, Any]) -> Dict[str, Any]:
         merged = dict(DEFAULT_FAVORITES_CONFIG)
         try:
             merged["run_interval_hours"] = max(1, float(raw.get("run_interval_hours", 6)))
+        except (TypeError, ValueError):
+            pass
+        return merged
+
+    if task_type == "refresh_detail":
+        merged = dict(DEFAULT_REFRESH_CONFIG)
+        try:
+            merged["batch_size"] = max(1, int(raw.get("batch_size", 25)))
+        except (TypeError, ValueError):
+            pass
+        try:
+            merged["min_fav"] = max(0, int(raw.get("min_fav", 0)))
         except (TypeError, ValueError):
             pass
         return merged
@@ -202,6 +226,8 @@ def _derive_type(source: str | None, strategy: str | None) -> str:
     # canonical source/strategy fields instead of storing duplicates.
     if source == "favorites":
         return "favorites"
+    if source == "refresh_detail":
+        return "refresh_detail"
     if strategy == "incremental":
         return "incremental"
     return "full"
@@ -210,6 +236,8 @@ def _derive_type(source: str | None, strategy: str | None) -> str:
 def _derive_category(source: str | None, strategy: str | None, scope: Dict[str, Any]) -> str:
     if source == "favorites":
         return FAVORITES_CATEGORY
+    if source == "refresh_detail":
+        return REFRESH_CATEGORY
     if strategy == "incremental":
         return MIXED_CATEGORY
     cat = scope.get("category")
@@ -320,26 +348,53 @@ def create_task(payload: SyncTaskCreate, db=Depends(get_db)):
                 status_code=409,
                 detail=f"Only one favorites task is allowed (existing id={existing[0]} name={existing[1]})",
             )
+    elif payload.type == "refresh_detail":
+        if payload.category != REFRESH_CATEGORY:
+            raise HTTPException(status_code=422, detail=f"refresh_detail category must be '{REFRESH_CATEGORY}'")
+        db.execute("SELECT id, name FROM sync_task_defs WHERE source = 'refresh_detail' LIMIT 1")
+        existing = db.fetchone()
+        if existing:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Only one refresh_detail task is allowed (existing id={existing[0]} name={existing[1]})",
+            )
 
     cfg = _normalize_config(payload.type, payload.config)
     state = _init_state(payload.type, cfg)
     progress = {"pct": 0}
-    task_kind = "favorites_sync" if payload.type == "favorites" else "gallery_sync"
-    source = "favorites" if payload.type == "favorites" else "gallery_list"
-    strategy = "incremental" if payload.type == "incremental" else "full"
+    if payload.type == "favorites":
+        task_kind = "favorites_sync"
+        source = "favorites"
+        strategy = "full"
+    elif payload.type == "refresh_detail":
+        task_kind = "refresh_detail"
+        source = "refresh_detail"
+        strategy = "refresh"
+    elif payload.type == "incremental":
+        task_kind = "gallery_sync"
+        source = "gallery_list"
+        strategy = "incremental"
+    else:
+        task_kind = "gallery_sync"
+        source = "gallery_list"
+        strategy = "full"
     if payload.type == "incremental":
         scope = {"categories": cfg.get("categories", [])}
     elif payload.type == "favorites":
         scope = {"target": "user_favorites"}
+    elif payload.type == "refresh_detail":
+        scope = {"target": "stale_detail_rows"}
     else:
         scope = {"category": payload.category}
-    schedule_kind = "periodic" if payload.type in {"favorites", "incremental"} else "manual"
+    schedule_kind = "periodic" if payload.type in {"favorites", "incremental", "refresh_detail"} else "manual"
     interval_sec = None
-    enabled = payload.type in {"favorites", "incremental"}
+    enabled = payload.type in {"favorites", "incremental", "refresh_detail"}
     if payload.type == "favorites":
         interval_sec = int(float(cfg.get("run_interval_hours", 6)) * 3600)
     elif payload.type == "incremental":
         interval_sec = 30
+    elif payload.type == "refresh_detail":
+        interval_sec = 300
 
     try:
         db.execute(

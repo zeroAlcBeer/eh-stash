@@ -104,6 +104,22 @@ func ValidateIncrementalTask(def *db.TaskDef) error {
 	return nil
 }
 
+func ValidateRefreshDetailTask(def *db.TaskDef) error {
+	if v, ok := def.Config["batch_size"]; ok {
+		f, ok := v.(float64)
+		if !ok || f <= 0 {
+			return fmt.Errorf("refresh_detail config.batch_size must be a positive number")
+		}
+	}
+	if v, ok := def.Config["min_fav"]; ok {
+		f, ok := v.(float64)
+		if !ok || f < 0 {
+			return fmt.Errorf("refresh_detail config.min_fav must be a non-negative number")
+		}
+	}
+	return nil
+}
+
 // cloneState returns a shallow copy of state so workers can mutate without
 // aliasing the caller's TaskDef.Checkpoint map.
 func cloneState(state map[string]any) map[string]any {
