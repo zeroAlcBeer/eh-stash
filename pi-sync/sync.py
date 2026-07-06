@@ -57,10 +57,14 @@ logging.basicConfig(
 log = logging.getLogger("pi-sync")
 
 # Columns synced Pi -> Neon. row_updated_at is Neon-only, computed server-side.
+# Includes 006_detail_extras fields (file_size, is_expunged, etc.) so that
+# detail-page data captured by the scraper propagates to the public database.
 COLS = [
     "gid", "token", "category", "title", "title_jpn", "uploader",
     "posted_at", "language", "pages", "rating", "fav_count", "thumb",
     "comment_count", "tags", "last_synced_at", "is_active", "base_title",
+    "file_size", "file_size_bytes", "rating_count", "visible",
+    "parent_gid", "torrent_count", "is_expunged",
 ]
 COL_LIST = ", ".join(COLS)
 PH       = ", ".join(["%s"] * len(COLS))
@@ -169,13 +173,13 @@ def pi_fetch_rot_summary(pi_conn, gid_lt, limit):
     with pi_conn.cursor() as cur:
         if gid_lt is None:
             cur.execute(
-                "SELECT gid, fav_count, is_active FROM eh_galleries "
+                "SELECT gid, fav_count, is_active, file_size FROM eh_galleries "
                 "ORDER BY gid DESC LIMIT %s",
                 (limit,),
             )
         else:
             cur.execute(
-                "SELECT gid, fav_count, is_active FROM eh_galleries "
+                "SELECT gid, fav_count, is_active, file_size FROM eh_galleries "
                 "WHERE gid < %s ORDER BY gid DESC LIMIT %s",
                 (gid_lt, limit),
             )
@@ -222,11 +226,11 @@ def neon_fetch_summary(neon_conn, gids):
         return {}
     with neon_conn.cursor() as cur:
         cur.execute(
-            "SELECT gid, fav_count, is_active FROM eh_galleries "
+            "SELECT gid, fav_count, is_active, file_size FROM eh_galleries "
             "WHERE gid = ANY(%s)",
             (list(gids),),
         )
-        return {r[0]: (r[1], r[2]) for r in cur.fetchall()}
+        return {r[0]: (r[1], r[2], r[3]) for r in cur.fetchall()}
 
 
 def neon_upsert_one(neon_conn, row):
@@ -263,18 +267,33 @@ def drain_outbox(pi_conn, neon_conn):
     gids = [r[0] for r in rows]
     full_map = {r[0]: r for r in pi_fetch_full(pi_conn, gids)}
 
+    # Batch-check which gids already exist on Neon — only new gids need
+    # R2 thumb upload. Existing gids just need a Neon UPSERT (detail field
+    # updates, fav_count changes, etc. don't change the thumbnail).
+    existing_gids = set(neon_fetch_summary(neon_conn, gids).keys())
+
+    # Separate into new (need R2) and existing (skip R2)
+    new_rows = []
+    existing_rows = []
     for gid, enq in rows:
+        full = full_map.get(gid)
+        if full is None:
+            # Pi row deleted between peek and full fetch — drop the outbox entry.
+            pi_outbox_delete_if_unchanged(pi_conn, gid, enq)
+            continue
+        if gid in existing_gids:
+            existing_rows.append((gid, enq, full))
+        else:
+            new_rows.append((gid, enq, full))
+
+    # New gids: R2 PUT + Neon UPSERT (need thumbnail on R2)
+    for gid, enq, full in new_rows:
         result = r2_put_thumb(gid)
         if result == "no_file":
             no_file += 1
             continue
         if result == "error":
             r2_err += 1
-            continue
-        full = full_map.get(gid)
-        if full is None:
-            # Pi row deleted between peek and full fetch — drop the outbox entry.
-            pi_outbox_delete_if_unchanged(pi_conn, gid, enq)
             continue
         try:
             neon_upsert_one(neon_conn, full)
@@ -293,7 +312,28 @@ def drain_outbox(pi_conn, neon_conn):
         if pi_outbox_delete_if_unchanged(pi_conn, gid, enq):
             pushed += 1
         else:
-            kept += 1  # scraper re-enqueued mid-flight; let next cycle handle it
+            kept += 1
+
+    # Existing gids: batch UPSERT only, skip R2 (thumb already uploaded)
+    if existing_rows:
+        try:
+            neon_upsert_many(neon_conn, [r[2] for r in existing_rows])
+        except psycopg2.OperationalError as e:
+            log.warning("outbox batch UPSERT failed (connection dead): %s", e)
+            raise
+        except Exception as e:
+            log.warning("outbox batch UPSERT failed: %s", e)
+            try:
+                neon_conn.rollback()
+            except Exception:
+                pass
+            existing_rows = []  # skip deletion below
+        for gid, enq, _ in existing_rows:
+            if pi_outbox_delete_if_unchanged(pi_conn, gid, enq):
+                pushed += 1
+            else:
+                kept += 1
+
     return (pushed, no_file, r2_err, kept)
 
 
@@ -315,10 +355,15 @@ def backfill_chunk(pi_conn, neon_conn, prev_cursor):
     pi_gids   = [r[0] for r in pi_subset]
     neon_map  = neon_fetch_summary(neon_conn, pi_gids)
 
-    new_gids     = [r[0] for r in pi_subset if r[0] not in neon_map]
+    new_gids = [r[0] for r in pi_subset if r[0] not in neon_map]
     changed_gids = [
         r[0] for r in pi_subset
-        if r[0] in neon_map and (r[1], r[2]) != neon_map[r[0]]
+        if r[0] in neon_map and (
+            # fav_count or is_active changed
+            (r[1], r[2]) != (neon_map[r[0]][0], neon_map[r[0]][1])
+            # Pi has detail (file_size NOT NULL) but Neon doesn't — backfill needed
+            or (r[3] is not None and neon_map[r[0]][2] is None)
+        )
     ]
 
     new_full = {r[0]: r for r in pi_fetch_full(pi_conn, new_gids)}
