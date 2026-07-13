@@ -1,4 +1,5 @@
 import React from 'react';
+import { Link } from 'react-router-dom';
 import { Star, Heart, MessageCircle, ExternalLink, FileText, Globe, User, Calendar, Layers } from 'lucide-react';
 import TagBadge from './TagBadge';
 import { getExUrl, LINK_TARGET, CATEGORY_STYLES, FALLBACK_IMAGE, getThumbUrl } from '../shared/gallery';
@@ -17,22 +18,13 @@ function GridCard({ gallery, onGroupClick }) {
   const hasGroup = gallery.group_count > 1;
   const date = formatDate(posted_at);
 
-  const handleClick = (e) => {
-    if (hasGroup) {
-      e.preventDefault();
-      onGroupClick?.(gallery.group_id);
-    }
-  };
-
   return (
-    <a
-      href={exUrl}
-      target={LINK_TARGET}
-      rel="noopener noreferrer"
-      onClick={handleClick}
-      className={`group flex flex-col rounded-lg overflow-hidden bg-zinc-900 transition-all duration-150 ${gallery.is_expunged ? 'opacity-40 hover:opacity-70 ' : ''}${!IS_PUBLIC && gallery.is_favorited ? 'ring-2 ring-rose-500/70 hover:ring-rose-400' : 'ring-1 ring-white/5 hover:ring-amber-400/60'}`}
-      title={displayTitle}
-    >
+    <article className={`group relative flex flex-col rounded-lg overflow-hidden bg-zinc-900 transition-[box-shadow,opacity] duration-150 ${gallery.is_expunged ? 'opacity-40 hover:opacity-70 ' : ''}${!IS_PUBLIC && gallery.is_favorited ? 'ring-2 ring-rose-500/70 hover:ring-rose-400' : 'ring-1 ring-white/5 hover:ring-amber-400/60'}`}>
+      <Link
+        to={`/gallery/${gid}`}
+        className="pressable flex flex-col flex-1"
+        title={displayTitle}
+      >
       {/* Cover */}
       <div className="relative" style={{ paddingTop: '140%' }}>
         <img
@@ -65,12 +57,6 @@ function GridCard({ gallery, onGroupClick }) {
             <Heart size={12} className="absolute top-1 left-1 fill-white text-white drop-shadow" aria-hidden="true" />
           </>
         )}
-        {/* Version count badge */}
-        {hasGroup && (
-          <span className="absolute bottom-1.5 left-1.5 flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-amber-500/80 text-xs font-bold text-white">
-            <Layers size={10} />{gallery.group_count}
-          </span>
-        )}
       </div>
 
       {/* Meta — flex-1 so it fills remaining height; justify-between pins stats to bottom */}
@@ -92,7 +78,27 @@ function GridCard({ gallery, onGroupClick }) {
           )}
         </div>
       </div>
-    </a>
+      </Link>
+      {hasGroup && (
+        <button
+          type="button"
+          onClick={() => onGroupClick?.(gallery.group_id)}
+          className="pressable absolute bottom-[3.15rem] left-1.5 z-10 flex items-center gap-0.5 rounded bg-amber-500/90 px-1.5 py-0.5 text-xs font-bold text-white shadow-lg shadow-black/20 hover:bg-amber-400"
+          aria-label={t('card.viewVersions', { count: gallery.group_count })}
+        >
+          <Layers size={10} />{gallery.group_count}
+        </button>
+      )}
+      <a
+        href={exUrl}
+        target={LINK_TARGET}
+        rel="noopener noreferrer"
+        className="pressable pointer-events-none absolute right-1.5 top-10 z-10 rounded-md bg-black/55 p-1.5 text-white/70 opacity-0 backdrop-blur-sm transition-[opacity,color] duration-150 hover:text-white group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
+        aria-label={t('card.openEx')}
+      >
+        <ExternalLink size={13} />
+      </a>
+    </article>
   );
 }
 
@@ -114,14 +120,9 @@ function ListRow({ gallery, onTagSearch, translate, onGroupClick }) {
   ];
 
   return (
-    <div className={`flex gap-3 rounded-lg bg-zinc-900 ring-1 ring-white/5 hover:ring-white/10 transition-all p-2.5 ${gallery.is_expunged ? 'opacity-40 hover:opacity-70' : ''}`}>
+    <div className={`flex gap-3 rounded-lg bg-zinc-900 ring-1 ring-white/5 hover:ring-white/10 transition-[box-shadow,opacity] p-2.5 ${gallery.is_expunged ? 'opacity-40 hover:opacity-70' : ''}`}>
       {/* Thumbnail */}
-      <a
-        href={exUrl}
-        target={LINK_TARGET}
-        rel="noopener noreferrer"
-        className="shrink-0"
-      >
+      <Link to={`/gallery/${gid}`} className="pressable shrink-0">
         <img
           src={thumb ? getThumbUrl(gid) : FALLBACK_IMAGE}
           alt={title}
@@ -131,21 +132,19 @@ function ListRow({ gallery, onTagSearch, translate, onGroupClick }) {
           className="w-[90px] h-[126px] sm:w-[140px] sm:h-[196px] object-contain bg-zinc-950 rounded"
           loading="lazy"
         />
-      </a>
+      </Link>
 
       {/* Content */}
       <div className="flex-1 min-w-0 flex flex-col gap-1.5">
         {/* Title + open link */}
         <div className="flex items-start justify-between gap-2">
-          <a
-            href={exUrl}
-            target={LINK_TARGET}
-            rel="noopener noreferrer"
-            className="text-sm font-medium text-gray-200 hover:text-white line-clamp-2 leading-snug"
+          <Link
+            to={`/gallery/${gid}`}
+            className="text-sm font-medium text-gray-200 hover:text-white line-clamp-2 leading-snug transition-colors"
           >
             {!IS_PUBLIC && gallery.is_favorited && <Heart size={12} className="inline fill-rose-400 text-rose-400 mr-1 -mt-0.5" aria-hidden="true" />}
             {displayTitle}
-          </a>
+          </Link>
           <a
             href={exUrl}
             target={LINK_TARGET}

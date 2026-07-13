@@ -41,7 +41,7 @@ DEFAULT_FAVORITES_CONFIG = {
 
 DEFAULT_REFRESH_CONFIG = {
     "batch_size": 25,
-    "min_fav": 0,
+    "min_fav": 200,
 }
 
 TASK_DEF_BASE_SELECT = """

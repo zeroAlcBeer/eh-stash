@@ -1,7 +1,8 @@
 import React, { useEffect, useReducer, useRef } from 'react';
-import { X, Star, Heart, FileText, Globe, Calendar, ExternalLink } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { X, Star, Heart, FileText, Globe, Calendar, ChevronRight } from 'lucide-react';
 import { fetchGalleryGroup } from '../api';
-import { getExUrl, LINK_TARGET, CATEGORY_STYLES, FALLBACK_IMAGE, getThumbUrl } from '../shared/gallery';
+import { CATEGORY_STYLES, FALLBACK_IMAGE, getThumbUrl } from '../shared/gallery';
 import { t, formatDate } from '../shared/i18n';
 import { IS_PUBLIC } from '../shared/mode';
 
@@ -69,18 +70,15 @@ export default function GroupModal({ groupId, onClose }) {
       {/* List */}
       <div className="p-3 flex flex-col gap-2">
         {galleries.map((g) => {
-          const exUrl = getExUrl(g.gid, g.token);
           const catStyle = CATEGORY_STYLES[g.category] || CATEGORY_STYLES['Misc'];
           const date = formatDate(g.posted_at);
           const displayTitle = g.title_jpn || g.title;
 
           return (
-            <a
+            <Link
               key={g.gid}
-              href={exUrl}
-              target={LINK_TARGET}
-              rel="noopener noreferrer"
-              className="flex gap-3 rounded-lg bg-zinc-800 ring-1 ring-white/5 hover:ring-amber-400/60 transition-all p-2.5"
+              to={`/gallery/${g.gid}`}
+              className="pressable flex gap-3 rounded-lg bg-zinc-800 ring-1 ring-white/5 hover:ring-amber-400/60 transition-shadow p-2.5"
             >
               {/* Thumbnail */}
               <img
@@ -122,10 +120,10 @@ export default function GroupModal({ groupId, onClose }) {
                       <Calendar size={10} />{date}
                     </span>
                   )}
-                  <ExternalLink size={10} className="ml-auto text-gray-600" />
+                  <ChevronRight size={12} className="ml-auto text-gray-600" />
                 </div>
               </div>
-            </a>
+            </Link>
           );
         })}
       </div>

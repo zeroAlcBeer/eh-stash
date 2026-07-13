@@ -266,33 +266,33 @@ func (s *Scheduler) newRiverClient(ctx context.Context) (*river.Client[pgx.Tx], 
 				},
 				&river.PeriodicJobOpts{ID: fmt.Sprintf("incremental-%d", taskID), RunOnStart: true},
 			))
-		slog.Info("[SCHED] periodic registered",
-			"task_id", taskID,
-			"id", fmt.Sprintf("incremental-%d", taskID),
-			"interval", interval,
-			"run_on_start", true,
-		)
-	}
-	if def.Source == "refresh_detail" && def.Strategy == "refresh" && def.ScheduleKind == "periodic" {
-		taskID := def.ID
-		interval := 5 * time.Minute
-		if def.ScheduleIntervalSec != nil && *def.ScheduleIntervalSec > 0 {
-			interval = time.Duration(*def.ScheduleIntervalSec) * time.Second
+			slog.Info("[SCHED] periodic registered",
+				"task_id", taskID,
+				"id", fmt.Sprintf("incremental-%d", taskID),
+				"interval", interval,
+				"run_on_start", true,
+			)
 		}
-		periodicJobs = append(periodicJobs, river.NewPeriodicJob(
-			river.PeriodicInterval(interval),
-			func() (river.JobArgs, *river.InsertOpts) {
-				return RefreshDetailArgs{TaskID: taskID}, activeUniqueInsertOpts()
-			},
-			&river.PeriodicJobOpts{ID: fmt.Sprintf("refresh-detail-%d", taskID), RunOnStart: false},
-		))
-		slog.Info("[SCHED] periodic registered",
-			"task_id", taskID,
-			"id", fmt.Sprintf("refresh-detail-%d", taskID),
-			"interval", interval,
-			"run_on_start", false,
-		)
-	}
+		if def.Source == "refresh_detail" && def.Strategy == "refresh" && def.ScheduleKind == "periodic" {
+			taskID := def.ID
+			interval := 5 * time.Minute
+			if def.ScheduleIntervalSec != nil && *def.ScheduleIntervalSec > 0 {
+				interval = time.Duration(*def.ScheduleIntervalSec) * time.Second
+			}
+			periodicJobs = append(periodicJobs, river.NewPeriodicJob(
+				river.PeriodicInterval(interval),
+				func() (river.JobArgs, *river.InsertOpts) {
+					return RefreshDetailArgs{TaskID: taskID}, activeUniqueInsertOpts()
+				},
+				&river.PeriodicJobOpts{ID: fmt.Sprintf("refresh-detail-%d", taskID), RunOnStart: false},
+			))
+			slog.Info("[SCHED] periodic registered",
+				"task_id", taskID,
+				"id", fmt.Sprintf("refresh-detail-%d", taskID),
+				"interval", interval,
+				"run_on_start", false,
+			)
+		}
 	}
 	slog.Info("[SCHED] periodic registration complete",
 		"task_defs", len(defs),
@@ -786,34 +786,47 @@ func (s *Scheduler) workRefreshDetail(ctx context.Context, taskID int, jobID int
 	}
 	if !def.Enabled {
 		slog.Info("[RFRSH] skip: def disabled", "task_id", taskID, "job_id", jobID)
+		if err := s.db.ClearTaskDefCurrentJob(context.Background(), taskID, jobID); err != nil {
+			return fmt.Errorf("clear disabled refresh_detail task: %w", err)
+		}
 		return nil
 	}
 	if err := task.ValidateRefreshDetailTask(def); err != nil {
 		slog.Warn("[RFRSH] validate failed", "task_id", taskID, "job_id", jobID, "error", err)
-		_ = s.db.MarkTaskDefFinished(ctx, taskID, jobID, def.Checkpoint, 0, true, err.Error())
+		if finishErr := s.db.MarkTaskDefFinished(ctx, taskID, jobID, def.Checkpoint, 0, true, err.Error()); finishErr != nil {
+			return fmt.Errorf("finish invalid refresh_detail task: %w", finishErr)
+		}
 		return err
 	}
 
 	result, runErr := task.RunRefreshDetailBatch(ctx, s.db, s.client, def, s.signals.GrouperTrigger)
 	if runErr != nil {
 		slog.Error("[RFRSH] run error", "task_id", taskID, "job_id", jobID, "error", runErr)
-		_ = s.db.MarkTaskDefFinished(context.Background(), taskID, jobID, result.Checkpoint, result.Pct, true, runErr.Error())
+		if finishErr := s.db.MarkTaskDefFinished(context.Background(), taskID, jobID, result.Checkpoint, result.Pct, true, runErr.Error()); finishErr != nil {
+			return fmt.Errorf("run refresh_detail: %v; finish task: %w", runErr, finishErr)
+		}
 		return runErr
 	}
 
 	checkpoint := result.Checkpoint
 	switch result.ExitReason {
 	case "DONE":
-		_ = s.db.MarkTaskDefFinished(context.Background(), taskID, jobID, checkpoint, 100, true, "")
+		if err := s.db.MarkTaskDefFinished(context.Background(), taskID, jobID, checkpoint, 100, true, ""); err != nil {
+			return fmt.Errorf("finish refresh_detail task: %w", err)
+		}
 		slog.Info("[RFRSH] round complete", "task_id", taskID, "job_id", jobID)
 	case "BANNED", "ERROR":
-		_ = s.db.MarkTaskDefFinished(context.Background(), taskID, jobID, checkpoint, result.Pct, true, "exit: "+result.ExitReason)
+		if err := s.db.MarkTaskDefFinished(context.Background(), taskID, jobID, checkpoint, result.Pct, true, "exit: "+result.ExitReason); err != nil {
+			return fmt.Errorf("pause refresh_detail task: %w", err)
+		}
 		slog.Warn("[RFRSH] round paused", "task_id", taskID, "job_id", jobID, "reason", result.ExitReason, "pct", result.Pct)
 	default:
-		// Persist checkpoint; the periodic scheduler will fire the next batch.
-		if err := s.db.UpdateTaskDefCheckpoint(context.Background(), taskID, checkpoint, result.Pct, "", true); err != nil {
-			slog.Error("[RFRSH] persist checkpoint failed", "task_id", taskID, "job_id", jobID, "error", err)
-			return fmt.Errorf("persist refresh_detail checkpoint: %w", err)
+		// This River work unit is complete even though the periodic task has
+		// more batches to run. Clear current_job_id so the task state reflects
+		// reality; periodic definitions remain enabled.
+		if err := s.db.MarkTaskDefFinished(context.Background(), taskID, jobID, checkpoint, result.Pct, true, ""); err != nil {
+			slog.Error("[RFRSH] finish batch failed", "task_id", taskID, "job_id", jobID, "error", err)
+			return fmt.Errorf("finish refresh_detail batch: %w", err)
 		}
 		slog.Info("[RFRSH] batch done, waiting for next periodic tick",
 			"task_id", taskID,

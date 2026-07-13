@@ -14,6 +14,19 @@ dialog::backdrop {
     }
 }
 
+/* Immediate press feedback for links and buttons. Keep this short because
+   these controls are used frequently; color/ring transitions remain local to
+   each component. */
+.pressable {
+    transition-property: transform;
+    transition-duration: 140ms;
+    transition-timing-function: cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.pressable:active {
+    transform: scale(0.97);
+}
+
 /* ── Gradient progress bar (native <progress>) ─────────────────────────────── */
 .gradient-progress {
     appearance: none;

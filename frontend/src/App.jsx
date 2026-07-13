@@ -3,6 +3,7 @@ import GalleryPage from './pages/GalleryPage';
 import FavoritesPage from './pages/FavoritesPage';
 import RecommendedPage from './pages/RecommendedPage';
 import AdminPage from './pages/AdminPage';
+import GalleryDetailPage from './pages/GalleryDetailPage';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import WelcomeModal from './components/WelcomeModal';
 import { isWelcomeAcked } from './shared/welcome';
@@ -94,6 +95,7 @@ function App() {
           <ErrorBoundary>
             <Routes>
               <Route path="/" element={<GalleryPage key="gallery" />} />
+              <Route path="/gallery/:gid" element={<GalleryDetailPage />} />
               {!IS_PUBLIC && (
                 <>
                   <Route path="/recommended" element={<RecommendedPage key="recommended" />} />

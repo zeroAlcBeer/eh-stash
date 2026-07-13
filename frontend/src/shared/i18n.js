@@ -88,6 +88,36 @@ const T = {
   'group.versions': { 'zh-CN': '{count} 个版本', 'zh-TW': '{count} 個版本', en: '{count} versions' },
   'group.close': { 'zh-CN': '关闭', 'zh-TW': '關閉', en: 'Close' },
 
+  // Internal gallery detail
+  'detail.back': { 'zh-CN': '返回画廊', 'zh-TW': '返回畫廊', en: 'Back to galleries' },
+  'detail.openEx': { 'zh-CN': '前往 ExHentai', 'zh-TW': '前往 ExHentai', en: 'Open in ExHentai' },
+  'detail.untitled': { 'zh-CN': '未命名画廊', 'zh-TW': '未命名畫廊', en: 'Untitled gallery' },
+  'detail.error.title': { 'zh-CN': '未找到画廊', 'zh-TW': '找不到畫廊', en: 'Gallery not found' },
+  'detail.error.body': { 'zh-CN': '画廊可能已被移除，或当前模式不允许访问。', 'zh-TW': '畫廊可能已被移除，或目前模式不允許存取。', en: 'The gallery may have been removed or is unavailable in this mode.' },
+  'detail.expunged': { 'zh-CN': '该画廊已被替换或移除，元数据仅供参考。', 'zh-TW': '此畫廊已被取代或移除，中介資料僅供參考。', en: 'This gallery was replaced or expunged. Its metadata may be stale.' },
+  'detail.pending': { 'zh-CN': '新版详情字段仍在补齐中，部分信息暂不可用。', 'zh-TW': '新版詳情欄位仍在補齊中，部分資訊暫不可用。', en: 'Extended detail fields are still being backfilled, so some values are unavailable.' },
+  'detail.metrics': { 'zh-CN': '画廊指标', 'zh-TW': '畫廊指標', en: 'Gallery metrics' },
+  'detail.rating': { 'zh-CN': '评分', 'zh-TW': '評分', en: 'Rating' },
+  'detail.votes': { 'zh-CN': '{count} 人评分', 'zh-TW': '{count} 人評分', en: '{count} votes' },
+  'detail.favorites': { 'zh-CN': '收藏', 'zh-TW': '收藏', en: 'Favorites' },
+  'detail.comments': { 'zh-CN': '评论', 'zh-TW': '評論', en: 'Comments' },
+  'detail.pages': { 'zh-CN': '页数', 'zh-TW': '頁數', en: 'Pages' },
+  'detail.fileSize': { 'zh-CN': '文件大小', 'zh-TW': '檔案大小', en: 'File size' },
+  'detail.torrents': { 'zh-CN': '种子', 'zh-TW': '種子', en: 'Torrents' },
+  'detail.uploader': { 'zh-CN': '上传者', 'zh-TW': '上傳者', en: 'Uploader' },
+  'detail.language': { 'zh-CN': '语言', 'zh-TW': '語言', en: 'Language' },
+  'detail.posted': { 'zh-CN': '发布时间', 'zh-TW': '發布時間', en: 'Published' },
+  'detail.visibility': { 'zh-CN': '可见状态', 'zh-TW': '可見狀態', en: 'Visibility' },
+  'detail.synced': { 'zh-CN': '详情更新', 'zh-TW': '詳情更新', en: 'Detail updated' },
+  'detail.tags': { 'zh-CN': '标签', 'zh-TW': '標籤', en: 'Tags' },
+  'detail.versions': { 'zh-CN': '{count} 个版本', 'zh-TW': '{count} 個版本', en: '{count} versions' },
+  'detail.similarity': { 'zh-CN': '偏好匹配 {value}', 'zh-TW': '偏好相符 {value}', en: '{value} preference match' },
+  'detail.comments.hint': { 'zh-CN': '上传者评论优先，其余按得分和原始顺序排列。', 'zh-TW': '上傳者評論優先，其餘依得分和原始順序排列。', en: 'Uploader comments appear first, followed by score and source order.' },
+  'detail.comments.error': { 'zh-CN': '评论加载失败，画廊元数据仍可正常查看。', 'zh-TW': '評論載入失敗，畫廊中介資料仍可正常查看。', en: 'Comments could not be loaded. Gallery metadata is still available.' },
+  'detail.comments.empty': { 'zh-CN': '尚未保存该画廊的评论。', 'zh-TW': '尚未儲存此畫廊的評論。', en: 'No saved comments for this gallery.' },
+  'detail.comment.uploader': { 'zh-CN': '上传者评论', 'zh-TW': '上傳者評論', en: 'Uploader comment' },
+  'detail.comment.anonymous': { 'zh-CN': '匿名', 'zh-TW': '匿名', en: 'Anonymous' },
+
   // Welcome modal — step 1: age gate
   'welcome.title': { 'zh-CN': '欢迎使用 EhStash', 'zh-TW': '歡迎使用 EhStash', en: 'Welcome to EhStash' },
   'welcome.age.heading': {
@@ -125,9 +155,9 @@ const T = {
 
   'welcome.compare.index.title': { 'zh-CN': '索引站，不是内容站', 'zh-TW': '索引站，不是內容站', en: 'Index, not a host' },
   'welcome.compare.index.body': {
-    'zh-CN': 'EhStash 只保存元数据和封面缩略图。点击卡片会跳转到 ExHentai 阅读完整画廊。移动端推荐使用 EhViewer 关联链接以获得最佳体验。',
-    'zh-TW': 'EhStash 只保存中介資料和封面縮圖。點擊卡片會跳轉到 ExHentai 閱讀完整畫廊。行動裝置推薦使用 EhViewer 關聯連結以獲得最佳體驗。',
-    en: 'EhStash only stores metadata and cover thumbnails. Click a card to jump to ExHentai for the full gallery. Mobile users get the best experience by associating links with EhViewer.'
+    'zh-CN': 'EhStash 保存元数据和封面缩略图。点击卡片可先查看站内详情，再前往 ExHentai 阅读完整画廊。',
+    'zh-TW': 'EhStash 儲存中介資料和封面縮圖。點擊卡片可先查看站內詳情，再前往 ExHentai 閱讀完整畫廊。',
+    en: 'EhStash stores metadata and cover thumbnails. Open a card for indexed details, then continue to ExHentai for the full gallery.'
   },
 
   'welcome.compare.fav.title': { 'zh-CN': 'Fav 排序', 'zh-TW': 'Fav 排序', en: 'Fav-first sort' },
@@ -252,4 +282,16 @@ export function formatDate(value, opts = { year: 'numeric', month: '2-digit', da
   if (!value) return null;
   const intl = INTL_LOCALE[locale] || 'en-US';
   return new Date(value).toLocaleDateString(intl, opts);
+}
+
+export function formatDateTime(value) {
+  if (!value) return null;
+  const intl = INTL_LOCALE[locale] || 'en-US';
+  return new Date(value).toLocaleString(intl, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }

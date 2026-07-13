@@ -9,6 +9,7 @@ import GroupModal from '../components/GroupModal';
 import { useTagTranslation } from '../hooks/useTagTranslation';
 import { t } from '../shared/i18n';
 import { IS_PUBLIC } from '../shared/mode';
+import { buildGalleryRequestParams, getGalleryBaseSort } from '../shared/galleryQuery';
 import { useAllowCosplay } from '../shared/settings';
 
 const PAGE_SIZE = 100;
@@ -22,6 +23,10 @@ const SORT_OPTIONS = [
 
 const RATING_CYCLE = [0, 3.5, 4, 4.5];
 
+// Product contract: Gallery sorting and minimum-rating filtering apply only
+// to the items already loaded on the current page. Do not pass either value
+// to the API. Pagination keeps its base order: gid for Gallery/Favorites and
+// recommendation rank for For You.
 const SORT_FNS = {
   fav_count: (a, b) => (b.fav_count ?? 0) - (a.fav_count ?? 0),
   rating: (a, b) => (b.rating ?? 0) - (a.rating ?? 0),
@@ -240,17 +245,16 @@ const GalleryPage = ({ favoritesOnly = false, recommendedOnly = false }) => {
     setSearchParams(filtersToParams(filters, page), { replace: true });
   }, [filters, page, setSearchParams]);
 
-  const apiSort = recommendedOnly ? 'recommended' : 'gid_desc';
+  const apiSort = getGalleryBaseSort(recommendedOnly);
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['galleries', page, apiSort, filters.category, filters.min_fav, filters.tags, filters.is_favorited, IS_PUBLIC && allowCosplay],
-    queryFn: () => {
-      const { sort, min_rating, is_favorited, tags, ...apiFilters } = filters;
-      const params = { page, page_size: PAGE_SIZE, sort: apiSort, tags, ...apiFilters };
-      if (is_favorited) params.is_favorited = true;
-      if (recommendedOnly) params.is_favorited = false;
-      return fetchGalleries(params);
-    },
+    queryFn: () => fetchGalleries(buildGalleryRequestParams({
+      filters,
+      page,
+      pageSize: PAGE_SIZE,
+      recommendedOnly,
+    })),
     placeholderData: keepPreviousData,
   });
 

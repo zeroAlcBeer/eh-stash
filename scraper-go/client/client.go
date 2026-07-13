@@ -16,10 +16,10 @@ import (
 	"strings"
 	"time"
 
+	utls "github.com/refraction-networking/utls"
 	"github.com/zeroAlcBeer/eh-stash/scraper-go/config"
 	"github.com/zeroAlcBeer/eh-stash/scraper-go/egress"
 	"github.com/zeroAlcBeer/eh-stash/scraper-go/ratelimit"
-	utls "github.com/refraction-networking/utls"
 )
 
 var banRE = regexp.MustCompile(
@@ -117,9 +117,10 @@ type FetchResult struct {
 }
 
 const (
-	ResultOK     = "ok"
-	ResultBanned = "banned"
-	ResultError  = "error"
+	ResultOK       = "ok"
+	ResultBanned   = "banned"
+	ResultNotFound = "not_found"
+	ResultError    = "error"
 )
 
 // FetchPage fetches a page with rate limiting and ban detection.
@@ -236,6 +237,16 @@ func (c *Client) fetchPageWithMode(ctx context.Context, pageURL string, mode egr
 			c.reportFailure(mode, egress.ErrKindParse, err)
 		}
 		return "", ResultError, err
+	}
+
+	// A removed detail page is a content state, not an egress failure. Callers
+	// that reconcile stored galleries can mark the row inactive instead of
+	// retrying it forever or rotating a healthy proxy.
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone {
+		if report {
+			c.reportSuccess(mode)
+		}
+		return "", ResultNotFound, nil
 	}
 
 	if resp.StatusCode != 200 {

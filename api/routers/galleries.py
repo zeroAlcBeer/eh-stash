@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Query, HTTPException
 from typing import Optional, List
 from db import get_db
-from models import Gallery, GalleryList
+from models import Gallery, GalleryComment, GalleryList
 from routers.admin import get_similarity_threshold
 import math
 import os
@@ -210,6 +210,8 @@ def get_galleries(
         query += " ORDER BY g.posted_at DESC NULLS LAST"
     elif sort == "fav_count":
         query += " ORDER BY g.fav_count DESC NULLS LAST"
+    elif sort == "comment_count":
+        query += " ORDER BY g.comment_count DESC NULLS LAST"
     elif sort == "gid_asc":
         query += " ORDER BY g.gid ASC"
     else:  # default gid_desc
@@ -253,10 +255,12 @@ def get_gallery_group(group_id: int, db = Depends(get_db)):
 def get_gallery(gid: int, db = Depends(get_db)):
     db.execute(
         """
-        SELECT g.*, (f.gid IS NOT NULL) AS is_favorited, f.favorited_at,
+        SELECT g.*, rc.similarity,
+               (f.gid IS NOT NULL) AS is_favorited, f.favorited_at,
                ggm.group_id,
                COALESCE(gc.cnt, 0) AS group_count
         FROM eh_galleries g
+        LEFT JOIN recommended_cache rc ON rc.gid = g.gid
         LEFT JOIN user_favorites f ON g.gid = f.gid
         LEFT JOIN gallery_group_members ggm ON g.gid = ggm.gid
         LEFT JOIN (
@@ -277,3 +281,26 @@ def get_gallery(gid: int, db = Depends(get_db)):
     col_names = [desc[0] for desc in db.description]
     item = dict(zip(col_names, row))
     return Gallery(**item)
+
+
+@router.get("/{gid}/comments", response_model=List[GalleryComment])
+def get_gallery_comments(
+    gid: int,
+    limit: int = Query(200, ge=1, le=500),
+    db = Depends(get_db),
+):
+    db.execute(
+        """
+        SELECT id, gid, comment_index, author, author_url, posted_at,
+               score, body, is_uploader_comment, fetched_at
+        FROM gallery_comments
+        WHERE gid = %s
+        ORDER BY is_uploader_comment DESC,
+                 score DESC NULLS LAST,
+                 comment_index ASC
+        LIMIT %s
+        """,
+        (gid, limit),
+    )
+    columns = [desc[0] for desc in db.description]
+    return [GalleryComment(**dict(zip(columns, row))) for row in db.fetchall()]

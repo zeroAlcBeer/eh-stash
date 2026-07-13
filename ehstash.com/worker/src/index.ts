@@ -14,6 +14,8 @@ type Bindings = {
   RATE_LIMITER: RateLimiter;
 };
 
+type SqlParameter = postgres.ParameterOrJSON<number>;
+
 const app = new Hono<{ Bindings: Bindings }>();
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -277,10 +279,10 @@ function buildWhere(input: {
   minFav: number;
   tags: Tag[];
   allowCosplay: boolean;
-}): { sql: string; values: unknown[] } {
-  const values: unknown[] = [];
+}): { sql: string; values: SqlParameter[] } {
+  const values: SqlParameter[] = [];
   const conds: string[] = ['g.is_active = TRUE'];
-  const bind = (v: unknown) => {
+  const bind = (v: SqlParameter) => {
     values.push(v);
     return `$${values.length}`;
   };
@@ -407,7 +409,7 @@ app.get('/v1/galleries/group/:groupId', async (c) => {
     const url = new URL(c.req.url);
     const allowCosplay = url.searchParams.get('allow_cosplay') === '1';
 
-    const params: unknown[] = [groupId];
+    const params: SqlParameter[] = [groupId];
     const cat = buildCategoryClause(allowCosplay, params.length + 1);
     params.push(...cat.params);
     const bl = buildBlacklistClause(params.length + 1);
@@ -446,7 +448,7 @@ app.get('/v1/galleries/:gid', async (c) => {
     const url = new URL(c.req.url);
     const allowCosplay = url.searchParams.get('allow_cosplay') === '1';
 
-    const params: unknown[] = [gid];
+    const params: SqlParameter[] = [gid];
     const cat = buildCategoryClause(allowCosplay, params.length + 1);
     params.push(...cat.params);
     const bl = buildBlacklistClause(params.length + 1);
@@ -456,7 +458,9 @@ app.get('/v1/galleries/:gid', async (c) => {
     const query = `
       SELECT g.gid, g.token, g.category, g.title, g.title_jpn, g.uploader,
              g.posted_at, g.language, g.pages, g.rating, g.fav_count,
-             g.thumb, g.comment_count, g.tags,
+             g.thumb, g.comment_count, g.tags, g.last_synced_at,
+             g.file_size, g.file_size_bytes, g.rating_count, g.visible,
+             g.parent_gid, g.torrent_count, g.is_expunged,
              ggm.group_id,
              COALESCE(gc.cnt, 0)::int AS group_count
       FROM eh_galleries g

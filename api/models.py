@@ -48,6 +48,19 @@ class GalleryList(BaseModel):
     size: int
     pages: int  # total number of pages
 
+
+class GalleryComment(BaseModel):
+    id: int
+    gid: int
+    comment_index: int
+    author: str = ""
+    author_url: Optional[str] = None
+    posted_at: Optional[str] = None
+    score: Optional[int] = None
+    body: str = ""
+    is_uploader_comment: bool = False
+    fetched_at: Optional[datetime] = None
+
 class Stats(BaseModel):
     total_galleries: int
     by_category: Dict[str, int]

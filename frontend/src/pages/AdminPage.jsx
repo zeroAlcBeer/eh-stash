@@ -50,7 +50,7 @@ const DEFAULT_INCREMENTAL = {
   rating_diff_threshold: 0.5,
 };
 const DEFAULT_FAVORITES = { run_interval_hours: 6 };
-const DEFAULT_REFRESH = { batch_size: 25, min_fav: 0 };
+const DEFAULT_REFRESH = { batch_size: 25, min_fav: 200 };
 const ACTIVE_JOB_STATES = ['available', 'pending', 'scheduled', 'running', 'retryable'];
 const RETRYABLE_TERMINAL_STATES = ['cancelled', 'discarded', 'completed'];
 const ADMIN_TABS = [
@@ -179,6 +179,7 @@ function getCheckpoint(task) {
 
 function getTaskMode(task) {
   if (task.source === 'favorites') return 'favorites';
+  if (task.source === 'refresh_detail') return 'refresh_detail';
   if (task.source === 'gallery_list' && task.strategy === 'incremental') return 'incremental';
   return 'full';
 }
@@ -205,6 +206,11 @@ function getProgressSummary(task) {
           : 'idle';
     return `${phase} · ${formatNumber(scanned)} / ${formatNumber(scanWindow)}`;
   }
+  if (getTaskMode(task) === 'refresh_detail') {
+    const done = Number(checkpoint.total_done || 0);
+    const pending = Number(checkpoint.total_pending || 0);
+    return `${formatNumber(done)} / ${formatNumber(done + pending)} · ${formatNumber(pending)} pending`;
+  }
   const pct = Number(task.progress_pct || 0);
   return `${pct < 1 ? pct.toFixed(3) : pct.toFixed(1)}%`;
 }
@@ -216,6 +222,12 @@ function getProgressPercent(task) {
     const scanWindow = Number(task.config?.scan_window || 10000);
     return Math.max(0, Math.min(100, scanWindow ? (scanned / scanWindow) * 100 : 0));
   }
+  if (getTaskMode(task) === 'refresh_detail') {
+    const done = Number(checkpoint.total_done || 0);
+    const pending = Number(checkpoint.total_pending || 0);
+    const total = done + pending;
+    return total > 0 ? Math.max(0, Math.min(100, (done / total) * 100)) : Number(task.progress_pct || 0);
+  }
   return Math.max(0, Math.min(100, Number(task.progress_pct || 0)));
 }
 
@@ -224,6 +236,7 @@ function getTaskSubtitle(task) {
   const schedule = formatTaskSchedule(task);
   if (mode === 'incremental') return `incremental · ${schedule}`;
   if (mode === 'favorites') return `favorites · ${schedule}`;
+  if (mode === 'refresh_detail') return `active · fav_count ≥ ${task.config?.min_fav ?? 200} · ${schedule}`;
   return `${task.scope?.category || task.category || 'gallery'} · ${schedule}`;
 }
 
@@ -478,10 +491,39 @@ function GenericCheckpoint({ task, checkpoint }) {
   );
 }
 
+function RefreshDetailCheckpoint({ task, checkpoint }) {
+  const done = Number(checkpoint.total_done || 0);
+  const pending = Number(checkpoint.total_pending || 0);
+  const total = done + pending;
+  const progress = total > 0 ? (done / total) * 100 : Number(task.progress_pct || 0);
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Activity size={14} className={pending > 0 ? 'text-cyan-300' : 'text-emerald-400'} />
+          <span className="text-xs uppercase tracking-wider text-gray-500">Detail coverage</span>
+        </div>
+        <span className="text-xs font-mono text-gray-400">pass {formatNumber(checkpoint.pass || 1)}</span>
+      </div>
+      <GradientProgressBar progress={progress} dbCount={done} totalCount={total} />
+      <div className="grid gap-1.5">
+        <MetaLine label="scope" value={`active · fav_count ≥ ${formatNumber(checkpoint.scope_min_fav ?? task.config?.min_fav ?? 200)}`} />
+        <MetaLine label="remaining" value={formatNumber(pending)} tone={pending > 0 ? 'warn' : 'strong'} />
+        <MetaLine label="cursor fav" value={formatNumber(checkpoint.cursor_fav)} />
+        <MetaLine label="cursor gid" value={formatNumber(checkpoint.cursor_gid)} />
+      </div>
+    </div>
+  );
+}
+
 function CheckpointPanel({ task }) {
   const checkpoint = getCheckpoint(task);
   if (getTaskMode(task) === 'incremental') {
     return <IncrementalCheckpoint task={task} checkpoint={checkpoint} />;
+  }
+  if (getTaskMode(task) === 'refresh_detail') {
+    return <RefreshDetailCheckpoint task={task} checkpoint={checkpoint} />;
   }
   return <GenericCheckpoint task={task} checkpoint={checkpoint} />;
 }

@@ -9,6 +9,7 @@
     "dev:public": "vite --mode public",
     "build": "vite build",
     "build:public": "vite build --mode public",
+    "test": "node --test",
     "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview"
   },

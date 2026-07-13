@@ -579,17 +579,26 @@ type RefreshCandidate struct {
 
 // GetGalleriesNeedingRefresh returns up to limit active galleries where
 // file_size IS NULL, ordered by fav_count DESC (highest value first).
-// offset is used for pagination across batches.
-func (d *DB) GetGalleriesNeedingRefresh(ctx context.Context, minFav int, limit int, offset int) ([]RefreshCandidate, error) {
+// The optional cursor provides stable keyset pagination while successful rows
+// disappear from the pending set. OFFSET must not be used on this shrinking
+// result set because it skips still-pending galleries after every upsert.
+func (d *DB) GetGalleriesNeedingRefresh(
+	ctx context.Context,
+	minFav int,
+	limit int,
+	cursorFav *int,
+	cursorGID *int64,
+) ([]RefreshCandidate, error) {
 	rows, err := d.pool.Query(ctx,
 		`SELECT gid, token, fav_count
 		 FROM eh_galleries
 		 WHERE file_size IS NULL
 		   AND is_active = true
 		   AND fav_count >= $1
+		   AND ($3::integer IS NULL OR (fav_count, gid) < ($3::integer, $4::bigint))
 		 ORDER BY fav_count DESC, gid DESC
-		 LIMIT $2 OFFSET $3`,
-		minFav, limit, offset)
+		 LIMIT $2`,
+		minFav, limit, cursorFav, cursorGID)
 	if err != nil {
 		return nil, err
 	}
@@ -606,13 +615,13 @@ func (d *DB) GetGalleriesNeedingRefresh(ctx context.Context, minFav int, limit i
 	return result, rows.Err()
 }
 
-// CountGalleriesNeedingRefresh counts active galleries with file_size IS NULL
-// and fav_count >= minFav. Used for progress reporting.
-func (d *DB) CountGalleriesNeedingRefresh(ctx context.Context, minFav int) (int, error) {
-	var count int
-	err := d.pool.QueryRow(ctx,
-		`SELECT COUNT(*) FROM eh_galleries
-		 WHERE file_size IS NULL AND is_active = true AND fav_count >= $1`,
-		minFav).Scan(&count)
-	return count, err
+// GetGalleryRefreshCoverage returns the authoritative target population and
+// remaining count for active galleries at the configured favorite threshold.
+func (d *DB) GetGalleryRefreshCoverage(ctx context.Context, minFav int) (total int, pending int, err error) {
+	err = d.pool.QueryRow(ctx,
+		`SELECT COUNT(*), COUNT(*) FILTER (WHERE file_size IS NULL)
+		 FROM eh_galleries
+		 WHERE is_active = true AND fav_count >= $1`,
+		minFav).Scan(&total, &pending)
+	return total, pending, err
 }
