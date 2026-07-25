@@ -805,6 +805,41 @@ def cloud_sync_status(
     )
 
 
+@router.get("/cloud-sync/events")
+def cloud_sync_events():
+    def stream():
+        listen_conn = psycopg2.connect(DATABASE_URL)
+        try:
+            listen_conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+            with listen_conn.cursor() as lcur:
+                lcur.execute("LISTEN cloud_sync_runtime;")
+            yield _sse({"ts": time.time()}, event="cloud.sync.ready")
+            while True:
+                if select_mod.select([listen_conn], [], [], 25)[0]:
+                    listen_conn.poll()
+                    notifications = list(listen_conn.notifies)
+                    listen_conn.notifies.clear()
+                    for notification in notifications:
+                        try:
+                            payload = json.loads(notification.payload)
+                        except (TypeError, ValueError):
+                            payload = {"updated": True}
+                        yield _sse(payload, event="cloud.sync")
+                else:
+                    yield _sse({"ts": time.time()}, event="ping")
+        finally:
+            listen_conn.close()
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 # ── Similarity Distribution & Threshold (cosine recommendation) ───────────────
 
 DEFAULT_SIMILARITY_THRESHOLD = 0.3

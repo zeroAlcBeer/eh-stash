@@ -1561,7 +1561,44 @@ function CloudLinkNode({ icon: Icon, eyebrow, title, detail, tone = 'default' })
   );
 }
 
+const STREAM_STATE = {
+  live: {
+    label: 'Live',
+    text: 'text-emerald-300',
+    ring: 'ring-emerald-500/25',
+    dot: 'bg-emerald-300',
+  },
+  reconnecting: {
+    label: 'Reconnecting',
+    text: 'text-amber-300',
+    ring: 'ring-amber-500/25',
+    dot: 'bg-amber-300',
+  },
+  connecting: {
+    label: 'Connecting',
+    text: 'text-gray-400',
+    ring: 'ring-white/15',
+    dot: 'bg-gray-500',
+  },
+};
+
+function StreamStateBadge({ state }) {
+  const cfg = STREAM_STATE[state] || STREAM_STATE.connecting;
+  return (
+    <span
+      aria-live="polite"
+      title="Status refreshes when pi-sync reports a heartbeat or changes phase."
+      className={`inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[11px] font-medium ring-1 ${cfg.text} ${cfg.ring}`}
+    >
+      <span className={`h-1.5 w-1.5 rounded-full ${cfg.dot} ${state === 'live' ? 'animate-pulse' : ''}`} />
+      {cfg.label}
+    </span>
+  );
+}
+
 function CloudSyncPanel() {
+  const queryClient = useQueryClient();
+  const [streamState, setStreamState] = useState('connecting');
   const {
     data,
     isLoading,
@@ -1573,6 +1610,33 @@ function CloudSyncPanel() {
     queryFn: () => getCloudSyncStatus(20),
     refetchInterval: false,
   });
+
+  useEffect(() => {
+    let refreshTimer = null;
+    const source = new EventSource('/api/v1/admin/cloud-sync/events');
+
+    const scheduleRefresh = () => {
+      if (refreshTimer != null) return;
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = null;
+        queryClient.invalidateQueries({ queryKey: ['admin', 'cloudSync'] });
+      }, 150);
+    };
+
+    source.onopen = () => setStreamState('live');
+    // Refresh once after LISTEN is active to close the race between the
+    // initial HTTP snapshot and event-stream subscription.
+    source.addEventListener('cloud.sync.ready', scheduleRefresh);
+    source.addEventListener('cloud.sync', scheduleRefresh);
+    source.onerror = () => setStreamState('reconnecting');
+
+    return () => {
+      if (refreshTimer != null) window.clearTimeout(refreshTimer);
+      source.onopen = null;
+      source.onerror = null;
+      source.close();
+    };
+  }, [queryClient]);
 
   if (isLoading) {
     return (
@@ -1605,15 +1669,18 @@ function CloudSyncPanel() {
           <p className="text-xs font-medium uppercase tracking-wider text-gray-500">Pi → Neon / R2</p>
           <p className="mt-1 text-sm text-gray-400">Runtime heartbeat and export history from the local Pi database.</p>
         </div>
-        <button
-          type="button"
-          onClick={() => refetch()}
-          disabled={isFetching}
-          className="pressable inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-medium text-gray-300 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-50"
-        >
-          <RefreshCw size={13} className={isFetching ? 'animate-spin' : ''} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <StreamStateBadge state={streamState} />
+          <button
+            type="button"
+            onClick={() => refetch()}
+            disabled={isFetching}
+            className="pressable inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-medium text-gray-300 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-50"
+          >
+            <RefreshCw size={13} className={isFetching ? 'animate-spin' : ''} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       <section className="rounded-lg border border-white/10 bg-zinc-950/45 p-4">
