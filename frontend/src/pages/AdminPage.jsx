@@ -127,7 +127,7 @@ function formatTaskScope(task) {
       ? `source: gallery_list · scope: ${categories.join(', ')}`
       : 'source: gallery_list · scope: mixed categories';
   }
-  return `source: gallery_list · scope: ${task.scope?.category || task.category || 'category'}`;
+  return `source: gallery_list · scope: ${task.scope?.category || 'category'}`;
 }
 
 function formatTaskSchedule(task) {
@@ -174,7 +174,7 @@ function activeCurrentJob(task) {
 }
 
 function getCheckpoint(task) {
-  return task.checkpoint || task.state || {};
+  return task.checkpoint || {};
 }
 
 function getTaskMode(task) {
@@ -237,7 +237,7 @@ function getTaskSubtitle(task) {
   if (mode === 'incremental') return `incremental · ${schedule}`;
   if (mode === 'favorites') return `favorites · ${schedule}`;
   if (mode === 'refresh_detail') return `active · fav_count ≥ ${task.config?.min_fav ?? 200} · ${schedule}`;
-  return `${task.scope?.category || task.category || 'gallery'} · ${schedule}`;
+  return `${task.scope?.category || 'gallery'} · ${schedule}`;
 }
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
@@ -378,7 +378,7 @@ function DefinitionPanel({ task }) {
       </div>
       <div className="grid gap-1.5">
         <MetaLine label="kind" value={formatTaskKind(task.task_kind)} />
-        <MetaLine label="strategy" value={task.strategy || task.type || 'sync'} />
+        <MetaLine label="strategy" value={task.strategy || 'sync'} />
         <MetaLine label="schedule" value={formatTaskSchedule(task)} />
         {task.requested_action && (
           <MetaLine label="request" value={task.requested_action} tone="warn" />
@@ -725,9 +725,9 @@ function CreateTaskModal({ onClose, onCreated, tasks }) {
   });
   const hasIncrementalTask = (tasks || []).some((task) => (
     task.source === 'gallery_list' && task.strategy === 'incremental'
-  ) || task.type === 'incremental');
-  const hasFavoritesSource = (tasks || []).some((task) => task.source === 'favorites' || task.type === 'favorites');
-  const hasRefreshDetailSource = (tasks || []).some((task) => task.source === 'refresh_detail' || task.type === 'refresh_detail');
+  ));
+  const hasFavoritesSource = (tasks || []).some((task) => task.source === 'favorites');
+  const hasRefreshDetailSource = (tasks || []).some((task) => task.source === 'refresh_detail');
 
   const handleClose = useCallback(() => {
     if (!busy) onClose();

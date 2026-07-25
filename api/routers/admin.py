@@ -250,32 +250,9 @@ def _derive_phase(item: Dict[str, Any]) -> tuple[str, str]:
     return "idle", "enabled, no job queued"
 
 
-def _legacy_status_for_job_state(job_state: str | None, enabled: bool) -> str:
-    if job_state in {"available", "pending", "scheduled", "running", "retryable"}:
-        return "running"
-    if job_state == "completed":
-        return "completed"
-    if job_state == "discarded":
-        return "error"
-    return "running" if enabled else "stopped"
-
-
-def _legacy_status_for_task(
-    current_job_state: str | None,
-    latest_job_state: str | None,
-    enabled: bool,
-    schedule_kind: str | None,
-) -> str:
-    if current_job_state:
-        return _legacy_status_for_job_state(current_job_state, enabled)
-    if enabled and schedule_kind == "periodic":
-        return "running"
-    return _legacy_status_for_job_state(latest_job_state, enabled)
-
-
 def _derive_type(source: str | None, strategy: str | None) -> str:
-    # Frontend still keys some UI off these legacy labels; derive them from the
-    # canonical source/strategy fields instead of storing duplicates.
+    # Config normalization still keys off this legacy label; derive it from
+    # the canonical source/strategy fields instead of storing duplicates.
     if source == "favorites":
         return "favorites"
     if source == "refresh_detail":
@@ -283,17 +260,6 @@ def _derive_type(source: str | None, strategy: str | None) -> str:
     if strategy == "incremental":
         return "incremental"
     return "full"
-
-
-def _derive_category(source: str | None, strategy: str | None, scope: Dict[str, Any]) -> str:
-    if source == "favorites":
-        return FAVORITES_CATEGORY
-    if source == "refresh_detail":
-        return REFRESH_CATEGORY
-    if strategy == "incremental":
-        return MIXED_CATEGORY
-    cat = scope.get("category")
-    return cat if isinstance(cat, str) else ""
 
 
 def _task_def_from_row(db, row) -> SyncTask:
@@ -314,14 +280,9 @@ def _task_def_from_row(db, row) -> SyncTask:
     return SyncTask(
         id=item["id"],
         name=item["name"],
-        type=_derive_type(source, strategy),
-        category=_derive_category(source, strategy, scope),
-        status=_legacy_status_for_task(current_job_state, latest_job_state, enabled, schedule_kind),
-        desired_status="running" if enabled else "stopped",
         phase=phase,
         phase_reason=phase_reason,
         config=item.get("config") or {},
-        state=checkpoint,
         progress_pct=float(progress.get("pct") or 0),
         created_at=item.get("created_at"),
         updated_at=item.get("updated_at"),
@@ -372,13 +333,6 @@ def _get_task_or_404(task_id: int, db) -> SyncTask:
     if not row:
         raise HTTPException(status_code=404, detail="Task not found")
     return _task_def_from_row(db, row)
-
-
-def _is_transitioning(task: SyncTask) -> bool:
-    return (
-        (task.status == "stopped" and task.desired_status == "running")
-        or (task.status == "running" and task.desired_status == "stopped")
-    )
 
 
 @router.post("/tasks", response_model=SyncTask, status_code=status.HTTP_201_CREATED)

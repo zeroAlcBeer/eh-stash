@@ -128,16 +128,11 @@ class SyncTaskUpdate(BaseModel):
 class SyncTask(BaseModel):
     id: int
     name: str
-    type: str
-    category: str
-    status: str
-    desired_status: str
     # Server-derived display state — the single source of truth for "what is
     # this task doing". phase_reason explains which rule fired.
-    phase: Optional[str] = None
-    phase_reason: Optional[str] = None
+    phase: str
+    phase_reason: str
     config: Dict[str, Any]
-    state: Dict[str, Any]
     progress_pct: float
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
