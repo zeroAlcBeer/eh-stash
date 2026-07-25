@@ -237,9 +237,27 @@ func (d *DB) InsertTaskEvent(ctx context.Context, taskID int, jobID *int64, even
 		payload = map[string]any{}
 	}
 	payloadJSON, _ := json.Marshal(payload)
+	// Global events (e.g. proxy.banned) carry no task: task_id <= 0 must
+	// become NULL or the FK to sync_task_defs rejects the row.
+	var taskRef any
+	if taskID > 0 {
+		taskRef = taskID
+	}
 	_, err := d.pool.Exec(ctx, `
 		INSERT INTO sync_task_events (task_id, job_id, event_type, message, payload)
 		VALUES ($1, $2, $3, $4, $5::jsonb)
-	`, taskID, jobID, eventType, message, string(payloadJSON))
+	`, taskRef, jobID, eventType, message, string(payloadJSON))
 	return err
+}
+
+// PruneTaskEvents deletes timeline events older than the retention window.
+func (d *DB) PruneTaskEvents(ctx context.Context, retention time.Duration) (int64, error) {
+	tag, err := d.pool.Exec(ctx, `
+		DELETE FROM sync_task_events
+		WHERE created_at < NOW() - make_interval(secs => $1)
+	`, retention.Seconds())
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }

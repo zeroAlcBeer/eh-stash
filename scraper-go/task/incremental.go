@@ -20,6 +20,16 @@ type IncrementalSliceResult struct {
 	ExitReason string  // "" = continue, "END"/"WINDOW" = round done, "BANNED"/"ERROR" = pause round
 	Checkpoint map[string]any
 	Pct        float64
+	Stats      SliceStats
+}
+
+// SliceStats summarizes one slice's page for the task event timeline.
+type SliceStats struct {
+	Items    int
+	New      int
+	Refresh  int
+	Skip     int
+	Upserted int
 }
 
 // RunIncrementalSlice fetches exactly one page of the incremental scan and
@@ -272,6 +282,8 @@ func RunIncrementalSlice(
 		}
 	}
 
+	result.Stats = SliceStats{Items: total, New: nNew, Refresh: nRefresh, Skip: nSkip}
+
 	if banned {
 		slog.Warn("[INCR ] page interrupted by ban",
 			"name", name,
@@ -298,6 +310,8 @@ func RunIncrementalSlice(
 		FlushCommentBatches(ctx, database, commentBatches)
 		notify(grouperTrigger)
 	}
+
+	result.Stats.Upserted = len(rowsToUpsert)
 
 	slog.Info("[INCR ] page summary",
 		"name", name,

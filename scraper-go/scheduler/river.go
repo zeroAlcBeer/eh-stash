@@ -19,13 +19,15 @@ import (
 )
 
 const (
-	RiverQueue          = "sync"
-	ManagerPollInterval = 5 * time.Second
-	IncrementalInterval = 30 * time.Second
-	SyncJobTimeout      = 30 * time.Minute
-	SliceJobTimeout     = 30 * time.Minute
-	KickJobTimeout      = 1 * time.Minute
-	SliceMaxAttempts    = 2
+	RiverQueue           = "sync"
+	ManagerPollInterval  = 5 * time.Second
+	IncrementalInterval  = 30 * time.Second
+	SyncJobTimeout       = 30 * time.Minute
+	SliceJobTimeout      = 30 * time.Minute
+	KickJobTimeout       = 1 * time.Minute
+	SliceMaxAttempts     = 2
+	EventPruneInterval   = 1 * time.Hour
+	EventRetentionWindow = 30 * 24 * time.Hour
 )
 
 type FullSyncArgs struct {
@@ -347,6 +349,7 @@ func (s *Scheduler) runRiverManager(ctx context.Context, riverClient *river.Clie
 	ticker := time.NewTicker(ManagerPollInterval)
 	defer ticker.Stop()
 
+	var lastPrune time.Time
 	for {
 		select {
 		case <-ctx.Done():
@@ -356,6 +359,14 @@ func (s *Scheduler) runRiverManager(ctx context.Context, riverClient *river.Clie
 				s.egress.Reconcile(ctx)
 			}
 			s.handleRequestedActions(ctx, riverClient)
+			if time.Since(lastPrune) >= EventPruneInterval {
+				lastPrune = time.Now()
+				if n, err := s.db.PruneTaskEvents(ctx, EventRetentionWindow); err != nil {
+					slog.Error("[SCHED] prune task events failed", "error", err)
+				} else if n > 0 {
+					slog.Info("[SCHED] pruned task events", "count", n)
+				}
+			}
 		}
 	}
 }
@@ -619,7 +630,22 @@ func (s *Scheduler) workIncrementalSlice(ctx context.Context, taskID int, runID 
 		return err
 	}
 
+	sliceStart := time.Now()
 	result, runErr := task.RunIncrementalSlice(ctx, s.db, s.client, def, s.signals.GrouperTrigger)
+	sliceDur := time.Since(sliceStart)
+	if runErr == nil {
+		_ = s.db.InsertTaskEvent(context.Background(), taskID, &jobID, "slice.done", "incremental slice done", map[string]any{
+			"run_id":      runID,
+			"exit_reason": result.ExitReason,
+			"items":       result.Stats.Items,
+			"new":         result.Stats.New,
+			"refresh":     result.Stats.Refresh,
+			"skip":        result.Stats.Skip,
+			"upserted":    result.Stats.Upserted,
+			"pct":         result.Pct,
+			"duration_ms": sliceDur.Milliseconds(),
+		})
+	}
 	if runErr != nil {
 		// ctx cancelled or upstream DB failure — let River retry / mark cancelled.
 		if ctx.Err() != nil {
@@ -659,6 +685,11 @@ func (s *Scheduler) workIncrementalSlice(ctx context.Context, taskID int, runID 
 		// Pause the round so the next periodic kick starts fresh.
 		checkpoint["run_id"] = nil
 		_ = s.db.MarkTaskDefFinished(context.Background(), taskID, jobID, checkpoint, result.Pct, true, "exit: "+result.ExitReason)
+		_ = s.db.InsertTaskEvent(context.Background(), taskID, &jobID, "round.paused", "incremental round paused", map[string]any{
+			"reason": result.ExitReason,
+			"run_id": runID,
+			"pct":    result.Pct,
+		})
 		slog.Warn("[INCR ] slice round paused",
 			"task_id", taskID,
 			"job_id", jobID,
@@ -819,6 +850,12 @@ func (s *Scheduler) workRefreshDetail(ctx context.Context, taskID int, jobID int
 		if err := s.db.MarkTaskDefFinished(context.Background(), taskID, jobID, checkpoint, result.Pct, true, "exit: "+result.ExitReason); err != nil {
 			return fmt.Errorf("pause refresh_detail task: %w", err)
 		}
+		_ = s.db.InsertTaskEvent(context.Background(), taskID, &jobID, "round.paused", "refresh_detail batch paused", map[string]any{
+			"reason":        result.ExitReason,
+			"pct":           result.Pct,
+			"total_done":    checkpoint["total_done"],
+			"total_pending": checkpoint["total_pending"],
+		})
 		slog.Warn("[RFRSH] round paused", "task_id", taskID, "job_id", jobID, "reason", result.ExitReason, "pct", result.Pct)
 	default:
 		// This River work unit is complete even though the periodic task has
@@ -828,6 +865,11 @@ func (s *Scheduler) workRefreshDetail(ctx context.Context, taskID int, jobID int
 			slog.Error("[RFRSH] finish batch failed", "task_id", taskID, "job_id", jobID, "error", err)
 			return fmt.Errorf("finish refresh_detail batch: %w", err)
 		}
+		_ = s.db.InsertTaskEvent(context.Background(), taskID, &jobID, "batch.done", "refresh_detail batch done", map[string]any{
+			"pct":           result.Pct,
+			"total_done":    checkpoint["total_done"],
+			"total_pending": checkpoint["total_pending"],
+		})
 		slog.Info("[RFRSH] batch done, waiting for next periodic tick",
 			"task_id", taskID,
 			"job_id", jobID,

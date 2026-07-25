@@ -493,6 +493,45 @@ def admin_events(
     return StreamingResponse(stream(), media_type="text/event-stream")
 
 
+@router.get("/tasks/{task_id}/events")
+def task_events(
+    task_id: int,
+    limit: int = Query(50, ge=1, le=200),
+    before_id: int | None = Query(None, ge=1),
+    db=Depends(get_db),
+):
+    """Recent timeline events for one task, newest first. before_id pages
+    backwards through history."""
+    _get_task_or_404(task_id, db)
+    params: list[Any] = [task_id]
+    where = "task_id = %s"
+    if before_id is not None:
+        where += " AND id < %s"
+        params.append(before_id)
+    params.append(limit)
+    db.execute(
+        f"""
+        SELECT id, job_id, event_type, message, payload, created_at
+        FROM sync_task_events
+        WHERE {where}
+        ORDER BY id DESC
+        LIMIT %s
+        """,
+        tuple(params),
+    )
+    return [
+        {
+            "id": row[0],
+            "job_id": row[1],
+            "type": row[2],
+            "message": row[3],
+            "payload": row[4] or {},
+            "created_at": row[5],
+        }
+        for row in db.fetchall()
+    ]
+
+
 @router.patch("/tasks/{task_id}", response_model=SyncTask)
 def patch_task(task_id: int, payload: SyncTaskUpdate, db=Depends(get_db)):
     db.execute("SELECT id, name, source, strategy, config FROM sync_task_defs WHERE id = %s", (task_id,))
