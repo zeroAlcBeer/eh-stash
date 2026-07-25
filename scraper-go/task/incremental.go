@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,12 +14,64 @@ import (
 	"github.com/zeroAlcBeer/eh-stash/scraper-go/parser"
 )
 
+// IncrementalCheckpoint is the typed shape of an incremental task's
+// checkpoint JSONB. One round = one run_id chain; see
+// docs/20260606_river_task_model.md.
+type IncrementalCheckpoint struct {
+	RunID        string  // "" = no chain in flight
+	NextGID      *string // EH list pagination cursor; nil = start of list
+	ScannedCount int
+	LatestGID    int64 // max gid seen this round; 0 = unset
+	Round        int   // completed rounds counter
+}
+
+// IncrementalCheckpointFromMap tolerates the historical shapes: run_id was
+// once written as a JSON number (the float64 precision loss that made it a
+// string), and any field may be absent or null.
+func IncrementalCheckpointFromMap(m map[string]any) IncrementalCheckpoint {
+	cp := IncrementalCheckpoint{
+		NextGID:      getStateString(m, "next_gid"),
+		ScannedCount: getStateInt(m, "scanned_count"),
+		LatestGID:    int64(getStateFloat(m, "latest_gid")),
+		Round:        getStateInt(m, "round"),
+	}
+	switch v := m["run_id"].(type) {
+	case string:
+		cp.RunID = v
+	case float64:
+		cp.RunID = strconv.FormatInt(int64(v), 10)
+	}
+	return cp
+}
+
+// ToMap renders the exact JSONB shape the API and frontend read, explicit
+// nulls included.
+func (c IncrementalCheckpoint) ToMap() map[string]any {
+	m := map[string]any{
+		"run_id":        nil,
+		"next_gid":      nil,
+		"latest_gid":    nil,
+		"scanned_count": c.ScannedCount,
+		"round":         c.Round,
+	}
+	if c.RunID != "" {
+		m["run_id"] = c.RunID
+	}
+	if c.NextGID != nil {
+		m["next_gid"] = *c.NextGID
+	}
+	if c.LatestGID > 0 {
+		m["latest_gid"] = c.LatestGID
+	}
+	return m
+}
+
 // IncrementalSliceResult is what RunIncrementalSlice returns to the worker so
 // it can decide whether to chain another slice, finalize the round, or surface
 // an exit reason.
 type IncrementalSliceResult struct {
-	ExitReason string  // "" = continue, "END"/"WINDOW" = round done, "BANNED"/"ERROR" = pause round
-	Checkpoint map[string]any
+	ExitReason string // "" = continue, "END"/"WINDOW" = round done, "BANNED"/"ERROR" = pause round
+	Checkpoint IncrementalCheckpoint
 	Pct        float64
 	Stats      SliceStats
 }
@@ -58,15 +111,15 @@ func RunIncrementalSlice(
 		}
 	}
 
-	checkpoint := cloneState(def.Checkpoint)
-	nextCursor := getStateString(checkpoint, "next_gid")
-	scannedCount := getStateInt(checkpoint, "scanned_count")
+	cp := IncrementalCheckpointFromMap(def.Checkpoint)
+	nextCursor := cp.NextGID
+	scannedCount := cp.ScannedCount
 
 	pctFor := func(scanned int) float64 {
 		return ClampProgress(float64(scanned) / float64(scanWindow) * 100)
 	}
 
-	result := IncrementalSliceResult{Checkpoint: checkpoint, Pct: pctFor(scannedCount)}
+	result := IncrementalSliceResult{Checkpoint: cp, Pct: pctFor(scannedCount)}
 
 	slog.Info("[INCR ] slice start",
 		"name", name,
@@ -121,14 +174,14 @@ func RunIncrementalSlice(
 		"next_cursor", nextStr,
 	)
 
-	if checkpoint["latest_gid"] == nil {
+	if result.Checkpoint.LatestGID == 0 {
 		maxGID := int64(0)
 		for _, item := range listResult.Items {
 			if item.GID > maxGID {
 				maxGID = item.GID
 			}
 		}
-		checkpoint["latest_gid"] = float64(maxGID)
+		result.Checkpoint.LatestGID = maxGID
 	}
 
 	var rowsToUpsert []db.GalleryRow
@@ -296,7 +349,7 @@ func RunIncrementalSlice(
 	}
 
 	scannedCount += len(listResult.Items)
-	checkpoint["scanned_count"] = float64(scannedCount)
+	result.Checkpoint.ScannedCount = scannedCount
 
 	if len(rowsToUpsert) > 0 {
 		if _, err := database.UpsertGalleriesBulk(ctx, rowsToUpsert); err != nil {
@@ -339,7 +392,7 @@ func RunIncrementalSlice(
 		return result, nil
 	}
 
-	checkpoint["next_gid"] = *listResult.NextCursor
+	result.Checkpoint.NextGID = listResult.NextCursor
 	slog.Info("[INCR ] page continue, chain next",
 		"name", name,
 		"scanned_count", scannedCount,

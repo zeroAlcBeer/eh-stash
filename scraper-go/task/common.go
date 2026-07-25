@@ -274,6 +274,8 @@ func getStateFloat(state map[string]any, key string) float64 {
 		return f
 	case int:
 		return float64(f)
+	case int64:
+		return float64(f)
 	default:
 		return 0
 	}

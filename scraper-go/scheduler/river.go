@@ -598,7 +598,7 @@ func (s *Scheduler) workIncrementalKick(ctx context.Context, taskID int) error {
 	}
 
 	// If a slice chain with a live run_id is already in flight, do nothing.
-	if runID := checkpointRunID(def.Checkpoint); runID != "" && def.CurrentJobID != nil {
+	if runID := task.IncrementalCheckpointFromMap(def.Checkpoint).RunID; runID != "" && def.CurrentJobID != nil {
 		slog.Info("[INCR ] kick skip: chain in flight",
 			"task_id", taskID,
 			"run_id", runID,
@@ -608,13 +608,13 @@ func (s *Scheduler) workIncrementalKick(ctx context.Context, taskID int) error {
 	}
 
 	newRunID := strconv.FormatInt(time.Now().UnixNano(), 10)
-	checkpoint := cloneStateMap(def.Checkpoint)
-	// Fresh round: reset all per-round state.
-	checkpoint["run_id"] = newRunID
-	checkpoint["next_gid"] = nil
-	checkpoint["scanned_count"] = float64(0)
-	checkpoint["latest_gid"] = nil
-	if err := s.db.UpdateTaskDefCheckpoint(ctx, taskID, checkpoint, 0, "", true); err != nil {
+	// Fresh round: reset all per-round state, keep the rounds counter.
+	cp := task.IncrementalCheckpointFromMap(def.Checkpoint)
+	cp.RunID = newRunID
+	cp.NextGID = nil
+	cp.ScannedCount = 0
+	cp.LatestGID = 0
+	if err := s.db.UpdateTaskDefCheckpoint(ctx, taskID, cp.ToMap(), 0, "", true); err != nil {
 		slog.Error("[INCR ] kick persist new run_id failed", "task_id", taskID, "error", err)
 		return err
 	}
@@ -653,7 +653,7 @@ func (s *Scheduler) workIncrementalSlice(ctx context.Context, taskID int, runID 
 	}
 
 	// Drop slices that belong to a stale round (cancelled, restarted, etc).
-	if cur := checkpointRunID(def.Checkpoint); cur != runID {
+	if cur := task.IncrementalCheckpointFromMap(def.Checkpoint).RunID; cur != runID {
 		slog.Info("[INCR ] slice dropped: stale run_id",
 			"task_id", taskID,
 			"job_id", jobID,
@@ -694,25 +694,24 @@ func (s *Scheduler) workIncrementalSlice(ctx context.Context, taskID int, runID 
 		// ctx cancelled or upstream DB failure — let River retry / mark cancelled.
 		if ctx.Err() != nil {
 			slog.Warn("[INCR ] slice cancelled by ctx", "task_id", taskID, "job_id", jobID, "run_id", runID, "ctx_err", ctx.Err())
-			cp := cloneStateMap(result.Checkpoint)
-			cp["run_id"] = nil
-			_ = s.db.MarkTaskDefFinished(context.Background(), taskID, jobID, cp, result.Pct, true, "cancelled")
+			cp := result.Checkpoint
+			cp.RunID = ""
+			_ = s.db.MarkTaskDefFinished(context.Background(), taskID, jobID, cp.ToMap(), result.Pct, true, "cancelled")
 		} else {
 			slog.Error("[INCR ] slice run error", "task_id", taskID, "job_id", jobID, "run_id", runID, "error", runErr)
 		}
 		return runErr
 	}
 
-	checkpoint := result.Checkpoint
+	cp := result.Checkpoint
 	switch result.ExitReason {
 	case "END", "WINDOW":
-		roundNum := getCheckpointInt(checkpoint, "round")
-		checkpoint["next_gid"] = nil
-		checkpoint["scanned_count"] = float64(0)
-		checkpoint["latest_gid"] = nil
-		checkpoint["run_id"] = nil
-		checkpoint["round"] = float64(roundNum + 1)
-		_ = s.db.MarkTaskDefFinished(context.Background(), taskID, jobID, checkpoint, 100, true, "")
+		cp.NextGID = nil
+		cp.ScannedCount = 0
+		cp.LatestGID = 0
+		cp.RunID = ""
+		cp.Round++
+		_ = s.db.MarkTaskDefFinished(context.Background(), taskID, jobID, cp.ToMap(), 100, true, "")
 		_ = s.db.InsertTaskEvent(context.Background(), taskID, &jobID, "round.finished", "incremental round finished", map[string]any{
 			"reason": result.ExitReason,
 			"run_id": runID,
@@ -722,13 +721,13 @@ func (s *Scheduler) workIncrementalSlice(ctx context.Context, taskID int, runID 
 			"job_id", jobID,
 			"run_id", runID,
 			"reason", result.ExitReason,
-			"next_round", roundNum+1,
+			"next_round", cp.Round,
 		)
 		return nil
 	case "BANNED", "ERROR":
 		// Pause the round so the next periodic kick starts fresh.
-		checkpoint["run_id"] = nil
-		_ = s.db.MarkTaskDefFinished(context.Background(), taskID, jobID, checkpoint, result.Pct, true, "exit: "+result.ExitReason)
+		cp.RunID = ""
+		_ = s.db.MarkTaskDefFinished(context.Background(), taskID, jobID, cp.ToMap(), result.Pct, true, "exit: "+result.ExitReason)
 		_ = s.db.InsertTaskEvent(context.Background(), taskID, &jobID, "round.paused", "incremental round paused", map[string]any{
 			"reason": result.ExitReason,
 			"run_id": runID,
@@ -744,7 +743,7 @@ func (s *Scheduler) workIncrementalSlice(ctx context.Context, taskID int, runID 
 		return nil
 	default:
 		// Persist cursor then chain the next slice.
-		if err := s.db.UpdateTaskDefCheckpoint(context.Background(), taskID, checkpoint, result.Pct, "", false); err != nil {
+		if err := s.db.UpdateTaskDefCheckpoint(context.Background(), taskID, cp.ToMap(), result.Pct, "", false); err != nil {
 			slog.Error("[INCR ] slice persist checkpoint failed", "task_id", taskID, "job_id", jobID, "error", err)
 			return fmt.Errorf("persist slice checkpoint: %w", err)
 		}
@@ -766,39 +765,6 @@ func (s *Scheduler) workIncrementalSlice(ctx context.Context, taskID int, runID 
 		}
 		return nil
 	}
-}
-
-func checkpointRunID(state map[string]any) string {
-	v, ok := state["run_id"]
-	if !ok || v == nil {
-		return ""
-	}
-	if s, ok := v.(string); ok {
-		return s
-	}
-	if f, ok := v.(float64); ok {
-		return strconv.FormatInt(int64(f), 10)
-	}
-	return ""
-}
-
-func getCheckpointInt(state map[string]any, key string) int {
-	v, ok := state[key]
-	if !ok {
-		return 0
-	}
-	if f, ok := v.(float64); ok {
-		return int(f)
-	}
-	return 0
-}
-
-func cloneStateMap(state map[string]any) map[string]any {
-	out := make(map[string]any, len(state)+4)
-	for k, v := range state {
-		out[k] = v
-	}
-	return out
 }
 
 func sliceInsertOpts() *river.InsertOpts {
