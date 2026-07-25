@@ -19,7 +19,9 @@ services:
       retries: 5
 
   scraper:
-    build: ./scraper-go
+    build:
+      context: .
+      dockerfile: scraper-go/Dockerfile
     depends_on:
       postgres:
         condition: service_healthy

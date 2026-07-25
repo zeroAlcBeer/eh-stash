@@ -1,0 +1,7 @@
+# Root context is only used by the scraper build (scraper-go/Dockerfile).
+# Allowlist: everything out except what that build needs.
+*
+!scraper-go
+!migrations
+scraper-go/**/*_test.go
+scraper-go/.env

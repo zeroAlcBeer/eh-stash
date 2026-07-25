@@ -57,6 +57,12 @@ func main() {
 	}
 	defer database.Close()
 
+	// Schema migrations (River's own schema is migrated in the scheduler)
+	if err := database.RunMigrations(ctx, cfg.MigrationsDir); err != nil {
+		slog.Error("schema migrations failed", "error", err)
+		os.Exit(1)
+	}
+
 	// Rate limiters
 	mainLimiter := ratelimit.New(
 		time.Duration(cfg.RateInterval*float64(time.Second)),

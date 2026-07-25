@@ -12,6 +12,7 @@ import (
 
 type Config struct {
 	DatabaseURL       string
+	MigrationsDir     string
 	ExBaseURL         string
 	Cookies           map[string]string
 	ProxyURL          string
@@ -40,6 +41,7 @@ func Load() (*Config, error) {
 
 	cfg := &Config{
 		DatabaseURL:       dbURL,
+		MigrationsDir:     getEnv("MIGRATIONS_DIR", "/app/migrations"),
 		ExBaseURL:         baseURL,
 		Cookies:           cookies,
 		ProxyURL:          os.Getenv("PROXY_URL"),
