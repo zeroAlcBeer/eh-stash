@@ -25,7 +25,7 @@ PI_SYNC_IMAGE  := eh-stash-pi-sync
 # Tag
 TAG ?= latest
 
-# Immutable tag derived from git HEAD (use via `make release-sha`)
+# Immutable tag derived from git HEAD.
 GIT_SHA := $(shell git rev-parse --short=12 HEAD 2>/dev/null)
 
 # Project name (= directory name, used by docker-compose to prefix local image names)
@@ -83,7 +83,8 @@ logs-frontend:
 
 
 # --- Deployment to NAS Registry ---
-.PHONY: tag push release-sha image-sha verify-remote diagnose
+.PHONY: tag push release-component release-api release-scraper release-frontend
+.PHONY: release-pi-sync release-all release-sha image-sha verify-remote diagnose
 
 # Tag freshly built images for the private registry (uses TAG variable, defaults to :latest)
 tag: build
@@ -101,38 +102,54 @@ push:
 	docker push $(REGISTRY_URL)/$(FRONTEND_IMAGE):$(TAG)
 	docker push $(REGISTRY_URL)/$(PI_SYNC_IMAGE):$(TAG)
 
-# Recommended release: build all 4 images + tag with :latest AND :$(GIT_SHA),
-# push both. Use the resulting SHA in the pi's /opt/stacks/ehstash/.env (TAG=...).
-release-sha: build
+# Build and publish one independently deployable component. Prefer one of the
+# release-{api,scraper,frontend,pi-sync} aliases instead of calling this target
+# directly.
+release-component:
 	@if [ -z "$(GIT_SHA)" ]; then echo "Error: not in a git repo"; exit 1; fi
+	@if [ -z "$(COMPONENT)" ]; then echo "Error: COMPONENT is required"; exit 1; fi
 	@if ! git diff-index --quiet HEAD --; then \
 		echo "Warning: working tree dirty — :$(GIT_SHA) will NOT represent committed state"; \
 	fi
-	@echo "--> Tagging + pushing 4 images @ $(GIT_SHA) ..."
-	@for entry in \
-		"$(LOCAL_API_IMAGE):$(API_IMAGE)" \
-		"$(LOCAL_SCRAPER_IMAGE):$(SCRAPER_IMAGE)" \
-		"$(LOCAL_FRONTEND_IMAGE):$(FRONTEND_IMAGE)" \
-		"$(LOCAL_PI_SYNC_IMAGE):$(PI_SYNC_IMAGE)" \
-	; do \
-		LOCAL=$${entry%%:*}; \
-		REMOTE=$${entry#*:}; \
-		echo "  [$$REMOTE]"; \
-		docker tag  $$LOCAL:latest $(REGISTRY_URL)/$$REMOTE:latest          || exit 1; \
-		docker tag  $$LOCAL:latest $(REGISTRY_URL)/$$REMOTE:$(GIT_SHA)       || exit 1; \
-		docker push $(REGISTRY_URL)/$$REMOTE:latest                          || exit 1; \
-		docker push $(REGISTRY_URL)/$$REMOTE:$(GIT_SHA)                      || exit 1; \
-	done
-	@echo ""
-	@echo "===================================================="
-	@echo "  Released eh-stash @ $(GIT_SHA)"
-	@echo "  4 images: api, scraper, frontend, pi-sync"
-	@echo "  Each tagged :latest AND :$(GIT_SHA)"
-	@echo ""
-	@echo "  Next on pi:"
-	@echo "    edit /opt/stacks/ehstash/.env  →  TAG=$(GIT_SHA)"
-	@echo "    cd /opt/stacks/ehstash && docker compose pull && docker compose up -d"
-	@echo "===================================================="
+	@set -eu; \
+	case "$(COMPONENT)" in \
+		api) \
+			LOCAL="$(LOCAL_API_IMAGE)"; REMOTE="$(API_IMAGE)"; \
+			docker-compose build $(API_SERVICE) ;; \
+		scraper) \
+			LOCAL="$(LOCAL_SCRAPER_IMAGE)"; REMOTE="$(SCRAPER_IMAGE)"; \
+			docker-compose build $(SCRAPER_SERVICE) ;; \
+		frontend) \
+			LOCAL="$(LOCAL_FRONTEND_IMAGE)"; REMOTE="$(FRONTEND_IMAGE)"; \
+			docker-compose build $(FRONTEND_SERVICE) ;; \
+		pi-sync) \
+			LOCAL="$(LOCAL_PI_SYNC_IMAGE)"; REMOTE="$(PI_SYNC_IMAGE)"; \
+			docker build -t "$$LOCAL:latest" ./pi-sync ;; \
+		*) echo "Error: unsupported COMPONENT=$(COMPONENT)"; exit 1 ;; \
+	esac; \
+	echo "--> Publishing $$REMOTE @ $(GIT_SHA)"; \
+	docker tag "$$LOCAL:latest" "$(REGISTRY_URL)/$$REMOTE:latest"; \
+	docker tag "$$LOCAL:latest" "$(REGISTRY_URL)/$$REMOTE:$(GIT_SHA)"; \
+	docker push "$(REGISTRY_URL)/$$REMOTE:latest"; \
+	docker push "$(REGISTRY_URL)/$$REMOTE:$(GIT_SHA)"
+
+release-api:
+	@$(MAKE) release-component COMPONENT=api --no-print-directory
+
+release-scraper:
+	@$(MAKE) release-component COMPONENT=scraper --no-print-directory
+
+release-frontend:
+	@$(MAKE) release-component COMPONENT=frontend --no-print-directory
+
+release-pi-sync:
+	@$(MAKE) release-component COMPONENT=pi-sync --no-print-directory
+
+# Full release remains available for changes that intentionally affect every
+# service. release-sha is kept as a backwards-compatible alias.
+release-all: release-api release-scraper release-frontend release-pi-sync
+
+release-sha: release-all
 
 # Print local repo digests (manifest SHAs from registry) for all 4 images.
 # Useful to verify what `make release-sha` will push, or what's currently pushed.
@@ -187,16 +204,22 @@ help:
 	@echo "  logs-frontend        Tail frontend logs"
 	@echo ""
 	@echo "Deployment (Pi private registry $(REGISTRY_URL)):"
-	@echo "  release-sha          build + tag :latest AND :$(GIT_SHA) + push both"
+	@echo "  release-api          build + publish API only"
+	@echo "  release-scraper      build + publish Scraper only"
+	@echo "  release-frontend     build + publish Frontend only"
+	@echo "  release-pi-sync      build + publish pi-sync only"
+	@echo "  release-all          publish all four components"
+	@echo "  release-sha          backwards-compatible alias for release-all"
 	@echo "  tag                  build + tag for :$(TAG) (low-level, no push)"
 	@echo "  push                 push :$(TAG) (low-level, no build)"
 	@echo "  image-sha            print local repo digests for all 4 images"
 	@echo "  verify-remote        query registry for current :$(TAG) manifest digests"
 	@echo "  diagnose             local + remote side by side"
 	@echo ""
-	@echo "Pi deployment flow (after make release-sha):"
-	@echo "  on pi:  edit /opt/stacks/ehstash/.env  →  TAG=<sha>"
-	@echo "          cd /opt/stacks/ehstash && docker compose pull && docker compose up -d"
+	@echo "Pi deployment flow (example: pi-sync):"
+	@echo "  local:  make release-pi-sync"
+	@echo "  on pi:  edit /opt/stacks/ehstash/.env  →  PI_SYNC_TAG=<sha>"
+	@echo "          docker compose pull pi-sync && docker compose up -d pi-sync"
 	@echo ""
 	@echo "Variables (override on command line or in Makefile.local):"
 	@echo "  REGISTRY_URL          (default: 192.168.0.110:5000)"
