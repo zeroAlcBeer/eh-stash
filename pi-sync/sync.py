@@ -26,6 +26,7 @@ import logging
 import os
 import signal
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import boto3
@@ -207,6 +208,12 @@ def pi_outbox_peek(pi_conn, limit):
         return cur.fetchall()
 
 
+def pi_outbox_stats(pi_conn):
+    with pi_conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*)::int, MIN(enqueued_at) FROM sync_outbox")
+        return cur.fetchone()
+
+
 def pi_outbox_delete_if_unchanged(pi_conn, gid, enqueued_at):
     """Returns True if the row was deleted (no concurrent re-enqueue)."""
     with pi_conn.cursor() as cur:
@@ -217,6 +224,87 @@ def pi_outbox_delete_if_unchanged(pi_conn, gid, enqueued_at):
         deleted = cur.rowcount
     pi_conn.commit()
     return deleted > 0
+
+
+# ─── Run history ────────────────────────────────────────────────────────────
+
+@dataclass
+class CycleStats:
+    selected: int = 0
+    pushed: int = 0
+    no_file: int = 0
+    r2_error: int = 0
+    kept: int = 0
+    group_affected: int | None = None
+
+
+def classify_error(error):
+    message = str(error).lower()
+    if "quota" in message or "compute time" in message:
+        return "quota"
+    if "password authentication failed" in message or "authentication" in message:
+        return "authentication"
+    if isinstance(error, psycopg2.OperationalError):
+        return "network"
+    if isinstance(error, ClientError):
+        return "r2"
+    return "unknown"
+
+
+def pi_start_run(pi_conn, trigger):
+    backlog, oldest = pi_outbox_stats(pi_conn)
+    with pi_conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO cloud_sync_runs (
+                trigger, cadence_sec, backlog_before, oldest_pending_before
+            )
+            VALUES (%s, %s, %s, %s)
+            RETURNING id
+            """,
+            (trigger, CADENCE_SEC, backlog, oldest),
+        )
+        run_id = cur.fetchone()[0]
+    pi_conn.commit()
+    return run_id
+
+
+def pi_finish_run(pi_conn, run_id, status, duration_ms, stats=None, error=None):
+    stats = stats or CycleStats()
+    try:
+        pi_conn.rollback()
+        backlog, oldest = pi_outbox_stats(pi_conn)
+        error_kind = classify_error(error) if error is not None else None
+        error_message = str(error)[:4000] if error is not None else None
+        with pi_conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE cloud_sync_runs
+                SET status = %s,
+                    finished_at = NOW(),
+                    duration_ms = %s,
+                    backlog_after = %s,
+                    oldest_pending_after = %s,
+                    selected_count = %s,
+                    pushed_count = %s,
+                    no_file_count = %s,
+                    r2_error_count = %s,
+                    kept_count = %s,
+                    group_affected = %s,
+                    error_kind = %s,
+                    error_message = %s
+                WHERE id = %s
+                """,
+                (
+                    status, duration_ms, backlog, oldest,
+                    stats.selected, stats.pushed, stats.no_file,
+                    stats.r2_error, stats.kept, stats.group_affected,
+                    error_kind, error_message, run_id,
+                ),
+            )
+        pi_conn.commit()
+    except Exception:
+        log.exception("failed to finalize cloud sync run id=%s", run_id)
 
 
 # ─── Neon helpers ───────────────────────────────────────────────────────────
@@ -258,10 +346,10 @@ def neon_run_grouper(neon_conn):
 # ─── Phase 1: outbox drain ──────────────────────────────────────────────────
 
 def drain_outbox(pi_conn, neon_conn):
-    """Returns (pushed, skip_no_file, skip_r2_err, kept_due_to_race)."""
+    """Returns (selected, pushed, skip_no_file, skip_r2_err, kept_due_to_race)."""
     rows = pi_outbox_peek(pi_conn, OUTBOX_BATCH)
     if not rows:
-        return (0, 0, 0, 0)
+        return (0, 0, 0, 0, 0)
 
     pushed = no_file = r2_err = kept = 0
     gids = [r[0] for r in rows]
@@ -334,7 +422,7 @@ def drain_outbox(pi_conn, neon_conn):
             else:
                 kept += 1
 
-    return (pushed, no_file, r2_err, kept)
+    return (len(rows), pushed, no_file, r2_err, kept)
 
 
 # ─── Phase 2: rotating backfill ─────────────────────────────────────────────
@@ -404,12 +492,13 @@ def backfill_chunk(pi_conn, neon_conn, prev_cursor):
 def run_cycle(pi_conn, neon_conn):
     state = pi_load_state(pi_conn)
     if state is None:
-        log.error("sync_state row missing; migration 009/011 applied?")
-        return
+        raise RuntimeError("sync_state row missing; migration 004 applied?")
     prev_cursor, caught_up, rotation_had_changes = state
 
     # Phase 1: outbox
-    obx_pushed, obx_no_file, obx_r2_err, obx_kept = drain_outbox(pi_conn, neon_conn)
+    obx_selected, obx_pushed, obx_no_file, obx_r2_err, obx_kept = drain_outbox(
+        pi_conn, neon_conn
+    )
 
     # Phase 2: backfill (only while not caught up)
     bf_new = bf_changed = 0
@@ -445,11 +534,19 @@ def run_cycle(pi_conn, neon_conn):
     pi_save_state(pi_conn, next_cursor, new_caught_up, new_rotation_had_changes)
 
     log.info(
-        "cycle: outbox(pushed=%d no_file=%d r2_err=%d kept=%d) "
+        "cycle: outbox(selected=%d pushed=%d no_file=%d r2_err=%d kept=%d) "
         "backfill(new=%d changed=%d wrap=%s) grouper=%d caught_up=%s cursor=%s",
-        obx_pushed, obx_no_file, obx_r2_err, obx_kept,
+        obx_selected, obx_pushed, obx_no_file, obx_r2_err, obx_kept,
         bf_new, bf_changed, wrap,
         group_affected, new_caught_up, next_cursor,
+    )
+    return CycleStats(
+        selected=obx_selected,
+        pushed=obx_pushed,
+        no_file=obx_no_file,
+        r2_error=obx_r2_err,
+        kept=obx_kept,
+        group_affected=group_affected,
     )
 
 
@@ -460,11 +557,21 @@ def main():
         "pi-sync starting: cadence=%ds rot=%d outbox_batch=%d thumbs=%s",
         CADENCE_SEC, CHUNK_ROT, OUTBOX_BATCH, THUMB_DIR,
     )
+    first_cycle = True
     while not _stopping:
         t0 = time.monotonic()
         pi = neon = None
+        run_id = None
+        stats = CycleStats()
         try:
             pi   = psycopg2.connect(PI_DSN)
+            if ONESHOT:
+                trigger = "oneshot"
+            elif first_cycle:
+                trigger = "startup"
+            else:
+                trigger = "scheduled"
+            run_id = pi_start_run(pi, trigger)
             # TCP keepalives so Neon-side drops surface quickly instead of
             # appearing alive until the first write.
             neon = psycopg2.connect(
@@ -472,9 +579,16 @@ def main():
                 keepalives=1, keepalives_idle=30,
                 keepalives_interval=10, keepalives_count=3,
             )
-            run_cycle(pi, neon)
+            stats = run_cycle(pi, neon)
+            elapsed_ms = round((time.monotonic() - t0) * 1000)
+            pi_finish_run(pi, run_id, "succeeded", elapsed_ms, stats=stats)
         except Exception as e:
             log.exception("cycle failed: %s", e)
+            if pi is not None and run_id is not None:
+                elapsed_ms = round((time.monotonic() - t0) * 1000)
+                pi_finish_run(
+                    pi, run_id, "failed", elapsed_ms, stats=stats, error=e
+                )
         finally:
             for c in (pi, neon):
                 if c is not None:
@@ -482,6 +596,7 @@ def main():
                         c.close()
                     except Exception:
                         pass
+        first_cycle = False
         elapsed = time.monotonic() - t0
         if _stopping or ONESHOT:
             log.info("cycle done in %.1fs%s", elapsed, " (oneshot, exiting)" if ONESHOT else "")
