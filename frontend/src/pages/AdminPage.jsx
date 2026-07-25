@@ -549,9 +549,17 @@ function summarizeEventPayload(event) {
   const p = event.payload || {};
   switch (event.type) {
     case 'slice.done': {
-      const dur = p.duration_ms != null ? `${(p.duration_ms / 1000).toFixed(1)}s` : '';
+      // Incremental slices report new/refresh; full slices report upserted/deleted.
+      const parts = [`items ${p.items ?? 0}`];
+      if (p.new != null || p.refresh != null) {
+        parts.push(`new ${p.new ?? 0}`, `refresh ${p.refresh ?? 0}`);
+      } else {
+        parts.push(`upserted ${p.upserted ?? 0}`);
+        if (p.deleted) parts.push(`deleted ${p.deleted}`);
+      }
+      if (p.duration_ms != null) parts.push(`${(p.duration_ms / 1000).toFixed(1)}s`);
       const exit = p.exit_reason ? ` → ${p.exit_reason}` : '';
-      return `items ${p.items ?? 0} · new ${p.new ?? 0} · refresh ${p.refresh ?? 0} · ${dur}${exit}`;
+      return parts.join(' · ') + exit;
     }
     case 'round.paused':
       return `reason ${p.reason || '—'}`;
