@@ -175,6 +175,52 @@ class ThumbQueueStats(BaseModel):
     waiting: int
 
 
+class CloudSyncRuntime(BaseModel):
+    phase: str
+    worker_started_at: Optional[datetime] = None
+    heartbeat_at: Optional[datetime] = None
+    heartbeat_age_sec: Optional[float] = None
+    heartbeat_fresh: bool
+    cycle_started_at: Optional[datetime] = None
+    last_success_at: Optional[datetime] = None
+    next_run_at: Optional[datetime] = None
+    current_run_id: Optional[int] = None
+    last_run_id: Optional[int] = None
+    cadence_sec: int
+    consecutive_failures: int
+    last_error_kind: Optional[str] = None
+    last_error_message: Optional[str] = None
+
+
+class CloudSyncRun(BaseModel):
+    id: int
+    trigger: str
+    cadence_sec: int
+    status: str
+    started_at: datetime
+    finished_at: Optional[datetime] = None
+    duration_ms: Optional[int] = None
+    backlog_before: int
+    backlog_after: Optional[int] = None
+    oldest_pending_before: Optional[datetime] = None
+    oldest_pending_after: Optional[datetime] = None
+    selected_count: int
+    pushed_count: int
+    no_file_count: int
+    r2_error_count: int
+    kept_count: int
+    group_affected: Optional[int] = None
+    error_kind: Optional[str] = None
+    error_message: Optional[str] = None
+
+
+class CloudSyncStatus(BaseModel):
+    observed_at: datetime
+    heartbeat_stale_after_sec: int
+    runtime: Optional[CloudSyncRuntime] = None
+    runs: List[CloudSyncRun]
+
+
 class SimilarityDistribution(BaseModel):
     buckets: List[Dict[str, Any]]  # [{min, max, count}, ...]
     total: int

@@ -66,6 +66,10 @@ export function getThumbStats() {
   return request('/thumb-queue/stats');
 }
 
+export function getCloudSyncStatus(limit = 20) {
+  return request(`/cloud-sync?limit=${limit}`);
+}
+
 export function getSimilarityDistribution() {
   return request('/recommended/distribution');
 }

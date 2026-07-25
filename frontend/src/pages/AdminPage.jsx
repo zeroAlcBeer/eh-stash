@@ -17,10 +17,15 @@ import {
   GitBranch,
   TerminalSquare,
   Zap,
+  ArrowRight,
+  Cloud,
+  HardDrive,
+  Radio,
 } from 'lucide-react';
 import {
   createTask,
   deleteTask,
+  getCloudSyncStatus,
   getTasks,
   getTaskEvents,
   getThumbStats,
@@ -55,6 +60,7 @@ const DEFAULT_REFRESH = { batch_size: 25, min_fav: 200 };
 const ACTIVE_JOB_STATES = ['available', 'pending', 'scheduled', 'running', 'retryable'];
 const RETRYABLE_TERMINAL_STATES = ['cancelled', 'discarded', 'completed'];
 const ADMIN_TABS = [
+  { id: 'cloud', label: 'Cloud Sync' },
   { id: 'sync', label: 'Sync Runs' },
   { id: 'queues', label: 'Queues' },
   { id: 'recommendations', label: 'Recommendations' },
@@ -169,6 +175,46 @@ function formatNumber(value) {
   const n = Number(value);
   if (Number.isNaN(n)) return String(value);
   return n.toLocaleString();
+}
+
+function formatDurationMs(value) {
+  if (value == null) return '—';
+  const ms = Number(value);
+  if (!Number.isFinite(ms)) return '—';
+  if (ms < 1000) return `${Math.round(ms)} ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)} s`;
+  return `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`;
+}
+
+function formatInterval(value) {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds <= 0) return '—';
+  if (seconds % 3600 === 0) return `${seconds / 3600}h`;
+  if (seconds >= 3600) return `${(seconds / 3600).toFixed(1)}h`;
+  if (seconds % 60 === 0) return `${seconds / 60}m`;
+  return `${seconds}s`;
+}
+
+function formatAge(value) {
+  if (value == null || value === '') return '—';
+  const seconds = Math.max(0, Math.round(Number(value)));
+  if (!Number.isFinite(seconds)) return '—';
+  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m ago`;
+}
+
+function formatRelativeTime(value, observedAt) {
+  if (!value || !observedAt) return '—';
+  const deltaSeconds = Math.round((new Date(value).getTime() - new Date(observedAt).getTime()) / 1000);
+  if (!Number.isFinite(deltaSeconds)) return '—';
+  const future = deltaSeconds >= 0;
+  const abs = Math.abs(deltaSeconds);
+  let compact;
+  if (abs < 60) compact = `${abs}s`;
+  else if (abs < 3600) compact = `${Math.floor(abs / 60)}m`;
+  else compact = `${Math.floor(abs / 3600)}h ${Math.floor((abs % 3600) / 60)}m`;
+  return future ? `in ${compact}` : `${compact} ago`;
 }
 
 function activeCurrentJob(task) {
@@ -1440,6 +1486,299 @@ function RecommendationsPanel() {
   );
 }
 
+const CLOUD_STATE = {
+  healthy: {
+    label: 'Healthy',
+    text: 'text-emerald-300',
+    bg: 'bg-emerald-500/10',
+    ring: 'ring-emerald-500/30',
+    dot: 'bg-emerald-300',
+  },
+  running: {
+    label: 'Syncing',
+    text: 'text-cyan-300',
+    bg: 'bg-cyan-500/10',
+    ring: 'ring-cyan-500/30',
+    dot: 'bg-cyan-300',
+  },
+  stale: {
+    label: 'Heartbeat stale',
+    text: 'text-amber-300',
+    bg: 'bg-amber-500/10',
+    ring: 'ring-amber-500/30',
+    dot: 'bg-amber-300',
+  },
+  failed: {
+    label: 'Failed',
+    text: 'text-rose-300',
+    bg: 'bg-rose-500/10',
+    ring: 'ring-rose-500/30',
+    dot: 'bg-rose-300',
+  },
+  stopped: {
+    label: 'Stopped',
+    text: 'text-gray-300',
+    bg: 'bg-white/5',
+    ring: 'ring-white/15',
+    dot: 'bg-gray-400',
+  },
+};
+
+function cloudState(runtime) {
+  if (!runtime) return 'stopped';
+  if (!runtime.heartbeat_fresh) return 'stale';
+  if (runtime.phase === 'failed') return 'failed';
+  if (runtime.phase === 'stopped') return 'stopped';
+  if (runtime.phase === 'running' || runtime.phase === 'starting') return 'running';
+  return 'healthy';
+}
+
+function CloudStateBadge({ state, label }) {
+  const cfg = CLOUD_STATE[state] || CLOUD_STATE.stopped;
+  return (
+    <span className={`inline-flex items-center gap-2 rounded-full px-2.5 py-1 text-xs font-medium ring-1 ${cfg.text} ${cfg.bg} ${cfg.ring}`}>
+      <span className={`h-1.5 w-1.5 rounded-full ${cfg.dot} ${state === 'running' ? 'animate-pulse' : ''}`} />
+      {label || cfg.label}
+    </span>
+  );
+}
+
+function CloudLinkNode({ icon: Icon, eyebrow, title, detail, tone = 'default' }) {
+  const toneClass = tone === 'good'
+    ? 'text-emerald-300'
+    : tone === 'warn'
+      ? 'text-amber-300'
+      : 'text-gray-300';
+  return (
+    <div className="min-w-0 rounded-lg border border-white/10 bg-white/[0.025] px-3 py-3">
+      <div className="flex items-center gap-2">
+        <Icon size={14} className={tone === 'good' ? 'text-emerald-400' : 'text-cyan-300'} />
+        <span className="text-[11px] uppercase tracking-wider text-gray-500">{eyebrow}</span>
+      </div>
+      <p className="mt-2 text-sm font-medium text-white">{title}</p>
+      <p className={`mt-0.5 truncate font-mono text-xs ${toneClass}`} title={detail}>{detail}</p>
+    </div>
+  );
+}
+
+function CloudSyncPanel() {
+  const {
+    data,
+    isLoading,
+    isError,
+    isFetching,
+    refetch,
+  } = useQuery({
+    queryKey: ['admin', 'cloudSync'],
+    queryFn: () => getCloudSyncStatus(20),
+    refetchInterval: false,
+  });
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center rounded-lg border border-white/10 bg-zinc-950/45 py-16">
+        <Loader2 size={22} className="animate-spin text-gray-500" />
+      </div>
+    );
+  }
+
+  if (isError || !data) {
+    return (
+      <div role="alert" className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-4 text-sm text-rose-300">
+        Cloud sync status could not be loaded.
+      </div>
+    );
+  }
+
+  const runtime = data.runtime;
+  const runs = data.runs || [];
+  const latest = runs[0];
+  const state = cloudState(runtime);
+  const issueCount = latest
+    ? Number(latest.no_file_count || 0) + Number(latest.r2_error_count || 0) + Number(latest.kept_count || 0)
+    : 0;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-xs font-medium uppercase tracking-wider text-gray-500">Pi → Neon / R2</p>
+          <p className="mt-1 text-sm text-gray-400">Runtime heartbeat and export history from the local Pi database.</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => refetch()}
+          disabled={isFetching}
+          className="pressable inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-medium text-gray-300 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-50"
+        >
+          <RefreshCw size={13} className={isFetching ? 'animate-spin' : ''} />
+          Refresh
+        </button>
+      </div>
+
+      <section className="rounded-lg border border-white/10 bg-zinc-950/45 p-4">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <CloudStateBadge state={state} />
+              <span className="font-mono text-xs text-gray-500">phase: {runtime?.phase || 'unavailable'}</span>
+            </div>
+            <p className="mt-3 text-lg font-semibold tracking-tight text-white">
+              {state === 'healthy' && 'Worker is alive and waiting for the next cycle.'}
+              {state === 'running' && 'A cloud sync cycle is in progress.'}
+              {state === 'stale' && 'The worker has stopped reporting heartbeats.'}
+              {state === 'failed' && 'The latest cloud sync cycle failed.'}
+              {state === 'stopped' && 'The cloud sync worker is not running.'}
+            </p>
+            <p className="mt-1 text-xs text-gray-500">
+              Observed {formatTimestamp(data.observed_at)} · stale after {formatInterval(data.heartbeat_stale_after_sec)}
+            </p>
+          </div>
+          <dl className="grid grid-cols-2 gap-x-8 gap-y-3 text-xs sm:grid-cols-3 lg:grid-cols-2">
+            <div>
+              <dt className="text-gray-500">Heartbeat</dt>
+              <dd className={`mt-1 font-mono ${runtime?.heartbeat_fresh ? 'text-emerald-300' : 'text-amber-300'}`}>
+                {formatAge(runtime?.heartbeat_age_sec)}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-gray-500">Next cycle</dt>
+              <dd className="mt-1 font-mono text-gray-200">{formatRelativeTime(runtime?.next_run_at, data.observed_at)}</dd>
+            </div>
+            <div>
+              <dt className="text-gray-500">Cadence</dt>
+              <dd className="mt-1 font-mono text-gray-200">{formatInterval(runtime?.cadence_sec)}</dd>
+            </div>
+            <div>
+              <dt className="text-gray-500">Failures</dt>
+              <dd className={`mt-1 font-mono ${runtime?.consecutive_failures ? 'text-rose-300' : 'text-gray-200'}`}>
+                {formatNumber(runtime?.consecutive_failures)}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-gray-500">Last success</dt>
+              <dd className="mt-1 whitespace-nowrap font-mono text-gray-200">{formatTimestamp(runtime?.last_success_at)}</dd>
+            </div>
+            <div>
+              <dt className="text-gray-500">Worker since</dt>
+              <dd className="mt-1 whitespace-nowrap font-mono text-gray-200">{formatTimestamp(runtime?.worker_started_at)}</dd>
+            </div>
+          </dl>
+        </div>
+
+        <div className="mt-4 grid items-stretch gap-2 md:grid-cols-[1fr_auto_1fr_auto_1fr]">
+          <CloudLinkNode
+            icon={HardDrive}
+            eyebrow="Source"
+            title="Pi PostgreSQL"
+            detail={`${formatNumber(latest?.backlog_after)} pending`}
+            tone={latest?.backlog_after === 0 ? 'good' : 'warn'}
+          />
+          <div className="hidden items-center justify-center text-white/20 md:flex">
+            <ArrowRight size={16} />
+          </div>
+          <CloudLinkNode
+            icon={Radio}
+            eyebrow="Worker"
+            title={`pi-sync · ${runtime?.phase || 'unknown'}`}
+            detail={`heartbeat ${formatAge(runtime?.heartbeat_age_sec)}`}
+            tone={runtime?.heartbeat_fresh ? 'good' : 'warn'}
+          />
+          <div className="hidden items-center justify-center text-white/20 md:flex">
+            <ArrowRight size={16} />
+          </div>
+          <CloudLinkNode
+            icon={Cloud}
+            eyebrow="Destinations"
+            title="Neon + R2"
+            detail={`${formatNumber(latest?.pushed_count)} pushed · ${formatNumber(issueCount)} issues`}
+            tone={issueCount === 0 && latest?.status === 'succeeded' ? 'good' : 'warn'}
+          />
+        </div>
+
+        {runtime?.last_error_message && (
+          <div className="mt-4 rounded-md border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+            <span className="font-mono">{runtime.last_error_kind || 'error'}</span>
+            <span className="mx-2 text-rose-400/50">·</span>
+            {runtime.last_error_message}
+          </div>
+        )}
+      </section>
+
+      <section>
+        <div className="mb-3 flex items-end justify-between gap-3">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wider text-gray-500">Recent export cycles</p>
+            <p className="mt-1 text-xs text-gray-600">Newest first · up to 20 runs</p>
+          </div>
+          <span className="font-mono text-xs text-gray-500">{runs.length} rows</span>
+        </div>
+        {runs.length === 0 ? (
+          <div className="rounded-lg border border-white/10 bg-zinc-950/45 py-12 text-center text-sm text-gray-500">
+            No cloud sync runs recorded yet.
+          </div>
+        ) : (
+          <div className="overflow-x-auto rounded-lg border border-white/10 bg-zinc-950/45">
+            <table className="w-full min-w-[780px] text-left text-xs">
+              <thead className="border-b border-white/10 text-[11px] uppercase tracking-wider text-gray-500">
+                <tr>
+                  <th className="px-3 py-2.5 font-medium">Run</th>
+                  <th className="px-3 py-2.5 font-medium">Status</th>
+                  <th className="px-3 py-2.5 font-medium">Started</th>
+                  <th className="px-3 py-2.5 text-right font-medium">Duration</th>
+                  <th className="px-3 py-2.5 text-right font-medium">Backlog</th>
+                  <th className="px-3 py-2.5 text-right font-medium">Pushed</th>
+                  <th className="px-3 py-2.5 text-right font-medium">Issues</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/[0.06]">
+                {runs.map((run) => {
+                  const runIssues = Number(run.no_file_count || 0)
+                    + Number(run.r2_error_count || 0)
+                    + Number(run.kept_count || 0);
+                  const runState = run.status === 'succeeded'
+                    ? 'healthy'
+                    : run.status === 'running'
+                      ? 'running'
+                      : 'failed';
+                  return (
+                    <tr key={run.id} className="text-gray-300 transition-colors hover:bg-white/[0.025]">
+                      <td className="px-3 py-3">
+                        <span className="font-mono text-white">#{run.id}</span>
+                        <span className="ml-2 text-gray-600">{run.trigger}</span>
+                      </td>
+                      <td className="px-3 py-3">
+                        <CloudStateBadge state={runState} label={run.status} />
+                        {run.error_kind && (
+                          <p className="mt-1 font-mono text-[11px] text-rose-400" title={run.error_message || ''}>
+                            {run.error_kind}
+                          </p>
+                        )}
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-3 font-mono text-gray-400">{formatTimestamp(run.started_at)}</td>
+                      <td className="px-3 py-3 text-right font-mono">{formatDurationMs(run.duration_ms)}</td>
+                      <td className="px-3 py-3 text-right font-mono">
+                        {formatNumber(run.backlog_before)} → {formatNumber(run.backlog_after)}
+                      </td>
+                      <td className="px-3 py-3 text-right font-mono text-emerald-300">{formatNumber(run.pushed_count)}</td>
+                      <td
+                        className={`px-3 py-3 text-right font-mono ${runIssues ? 'text-amber-300' : 'text-gray-500'}`}
+                        title={`no file: ${run.no_file_count} · R2: ${run.r2_error_count} · kept: ${run.kept_count}`}
+                      >
+                        {formatNumber(runIssues)}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 const initialUiState = { createOpen: false, deleteTarget: null };
@@ -1463,7 +1802,7 @@ export default function AdminPage() {
   const [ui, dispatchUi] = useReducer(uiReducer, initialUiState);
   const [errorMsg, setErrorMsg] = useState('');
   const [pendingByTask, setPendingByTask] = useState({});
-  const [activeTab, setActiveTab] = useState('sync');
+  const [activeTab, setActiveTab] = useState('cloud');
   const sseRetryRef = useRef(0);
   const lastEventIdRef = useRef(0);
 
@@ -1668,6 +2007,7 @@ export default function AdminPage() {
         </div>
       </div>
 
+      {activeTab === 'cloud' && <CloudSyncPanel />}
       {activeTab === 'sync' && (
         <SyncRunsPanel
           tasks={tasks}

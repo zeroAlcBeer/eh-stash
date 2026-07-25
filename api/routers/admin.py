@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from db import DATABASE_URL, get_cursor, get_db
 from models import (
+    CloudSyncStatus,
     EmbeddingsStatus,
     FAVORITES_CATEGORY,
     MIXED_CATEGORY,
@@ -680,6 +681,127 @@ def thumb_queue_stats(db=Depends(get_db)):
         processing=row[1],
         done=row[2],
         waiting=row[3],
+    )
+
+
+# ── Pi -> Neon + R2 cloud sync status ───────────────────────────────────────
+
+HEARTBEAT_STALE_AFTER_SEC = 180
+
+
+@router.get("/cloud-sync", response_model=CloudSyncStatus)
+def cloud_sync_status(
+    limit: int = Query(20, ge=1, le=100),
+    db=Depends(get_db),
+):
+    db.execute(
+        """
+        SELECT
+            NOW(),
+            phase,
+            worker_started_at,
+            heartbeat_at,
+            CASE
+                WHEN heartbeat_at IS NULL THEN NULL
+                ELSE EXTRACT(EPOCH FROM (NOW() - heartbeat_at))::double precision
+            END,
+            heartbeat_at IS NOT NULL
+                AND NOW() - heartbeat_at <= (%s * INTERVAL '1 second'),
+            cycle_started_at,
+            last_success_at,
+            next_run_at,
+            current_run_id,
+            last_run_id,
+            cadence_sec,
+            consecutive_failures,
+            last_error_kind,
+            last_error_message
+        FROM cloud_sync_runtime
+        WHERE id = 1
+        """,
+        (HEARTBEAT_STALE_AFTER_SEC,),
+    )
+    runtime_row = db.fetchone()
+    observed_at = runtime_row[0] if runtime_row else None
+    runtime = None
+    if runtime_row:
+        runtime = {
+            "phase": runtime_row[1],
+            "worker_started_at": runtime_row[2],
+            "heartbeat_at": runtime_row[3],
+            "heartbeat_age_sec": runtime_row[4],
+            "heartbeat_fresh": runtime_row[5],
+            "cycle_started_at": runtime_row[6],
+            "last_success_at": runtime_row[7],
+            "next_run_at": runtime_row[8],
+            "current_run_id": runtime_row[9],
+            "last_run_id": runtime_row[10],
+            "cadence_sec": runtime_row[11],
+            "consecutive_failures": runtime_row[12],
+            "last_error_kind": runtime_row[13],
+            "last_error_message": runtime_row[14],
+        }
+    else:
+        db.execute("SELECT NOW()")
+        observed_at = db.fetchone()[0]
+
+    db.execute(
+        """
+        SELECT
+            id,
+            trigger,
+            cadence_sec,
+            status,
+            started_at,
+            finished_at,
+            duration_ms,
+            backlog_before,
+            backlog_after,
+            oldest_pending_before,
+            oldest_pending_after,
+            selected_count,
+            pushed_count,
+            no_file_count,
+            r2_error_count,
+            kept_count,
+            group_affected,
+            error_kind,
+            error_message
+        FROM cloud_sync_runs
+        ORDER BY started_at DESC
+        LIMIT %s
+        """,
+        (limit,),
+    )
+    runs = [
+        {
+            "id": row[0],
+            "trigger": row[1],
+            "cadence_sec": row[2],
+            "status": row[3],
+            "started_at": row[4],
+            "finished_at": row[5],
+            "duration_ms": row[6],
+            "backlog_before": row[7],
+            "backlog_after": row[8],
+            "oldest_pending_before": row[9],
+            "oldest_pending_after": row[10],
+            "selected_count": row[11],
+            "pushed_count": row[12],
+            "no_file_count": row[13],
+            "r2_error_count": row[14],
+            "kept_count": row[15],
+            "group_affected": row[16],
+            "error_kind": row[17],
+            "error_message": row[18],
+        }
+        for row in db.fetchall()
+    ]
+    return CloudSyncStatus(
+        observed_at=observed_at,
+        heartbeat_stale_after_sec=HEARTBEAT_STALE_AFTER_SEC,
+        runtime=runtime,
+        runs=runs,
     )
 
 
