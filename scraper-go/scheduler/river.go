@@ -349,11 +349,18 @@ func (s *Scheduler) runRiverManager(ctx context.Context, riverClient *river.Clie
 	ticker := time.NewTicker(ManagerPollInterval)
 	defer ticker.Stop()
 
+	// NOTIFY from the task_action trigger makes user actions apply instantly;
+	// the ticker stays as fallback (and drives egress reconcile + pruning).
+	actionCh := make(chan struct{}, 1)
+	go s.listenTaskActions(ctx, actionCh)
+
 	var lastPrune time.Time
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-actionCh:
+			s.handleRequestedActions(ctx, riverClient)
 		case <-ticker.C:
 			if s.egress != nil {
 				s.egress.Reconcile(ctx)
@@ -367,6 +374,43 @@ func (s *Scheduler) runRiverManager(ctx context.Context, riverClient *river.Clie
 					slog.Info("[SCHED] pruned task events", "count", n)
 				}
 			}
+		}
+	}
+}
+
+// listenTaskActions holds a dedicated connection on LISTEN task_action and
+// pokes the manager loop whenever the API writes a requested_action. Absent
+// trigger or connection loss degrades to the ticker fallback.
+func (s *Scheduler) listenTaskActions(ctx context.Context, notify chan<- struct{}) {
+	for ctx.Err() == nil {
+		if err := s.waitTaskActions(ctx, notify); err != nil && ctx.Err() == nil {
+			slog.Warn("[SCHED] task action listener reconnecting", "error", err)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(5 * time.Second):
+			}
+		}
+	}
+}
+
+func (s *Scheduler) waitTaskActions(ctx context.Context, notify chan<- struct{}) error {
+	conn, err := pgx.Connect(ctx, s.cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer conn.Close(context.Background())
+	if _, err := conn.Exec(ctx, "LISTEN task_action"); err != nil {
+		return err
+	}
+	slog.Info("[SCHED] listening for task action notifications")
+	for {
+		if _, err := conn.WaitForNotification(ctx); err != nil {
+			return err
+		}
+		select {
+		case notify <- struct{}{}:
+		default:
 		}
 	}
 }

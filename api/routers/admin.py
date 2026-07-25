@@ -1,13 +1,16 @@
 import json
 import math
+import select as select_mod
 import time
 from typing import Any, Dict
 
+import psycopg2
+import psycopg2.extensions
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from db import get_cursor, get_db
+from db import DATABASE_URL, get_cursor, get_db
 from models import (
     EmbeddingsStatus,
     FAVORITES_CATEGORY,
@@ -456,39 +459,51 @@ def admin_events(
 
     def stream():
         last_id = start_after
-        while True:
-            emitted = False
-            with get_cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT id, task_id, job_id, event_type, message, payload, created_at
-                    FROM sync_task_events
-                    WHERE id > %s
-                    ORDER BY id ASC
-                    LIMIT 100
-                    """,
-                    (last_id,),
-                )
-                for row in cur.fetchall():
-                    event_id, task_id, job_id, event_type, message, payload, created_at = row
-                    last_id = event_id
-                    emitted = True
-                    yield _sse(
-                        {
-                            "id": event_id,
-                            "task_id": task_id,
-                            "job_id": job_id,
-                            "type": event_type,
-                            "message": message,
-                            "payload": payload or {},
-                            "created_at": created_at,
-                        },
-                        event="admin.task",
-                        event_id=event_id,
+        # Dedicated LISTEN connection: new rows wake the stream instantly via
+        # the task_events trigger; the 5s select timeout keeps the old ping
+        # cadence and doubles as fallback if the trigger is missing.
+        listen_conn = psycopg2.connect(DATABASE_URL)
+        try:
+            listen_conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+            with listen_conn.cursor() as lcur:
+                lcur.execute("LISTEN task_events;")
+            while True:
+                emitted = False
+                with get_cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT id, task_id, job_id, event_type, message, payload, created_at
+                        FROM sync_task_events
+                        WHERE id > %s
+                        ORDER BY id ASC
+                        LIMIT 100
+                        """,
+                        (last_id,),
                     )
-            if not emitted:
-                yield _sse({"ts": time.time()}, event="ping")
-            time.sleep(5)
+                    for row in cur.fetchall():
+                        event_id, task_id, job_id, event_type, message, payload, created_at = row
+                        last_id = event_id
+                        emitted = True
+                        yield _sse(
+                            {
+                                "id": event_id,
+                                "task_id": task_id,
+                                "job_id": job_id,
+                                "type": event_type,
+                                "message": message,
+                                "payload": payload or {},
+                                "created_at": created_at,
+                            },
+                            event="admin.task",
+                            event_id=event_id,
+                        )
+                if not emitted:
+                    yield _sse({"ts": time.time()}, event="ping")
+                if select_mod.select([listen_conn], [], [], 5)[0]:
+                    listen_conn.poll()
+                    listen_conn.notifies.clear()
+        finally:
+            listen_conn.close()
 
     return StreamingResponse(stream(), media_type="text/event-stream")
 
