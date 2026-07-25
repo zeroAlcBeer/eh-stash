@@ -132,6 +132,10 @@ class SyncTask(BaseModel):
     category: str
     status: str
     desired_status: str
+    # Server-derived display state — the single source of truth for "what is
+    # this task doing". phase_reason explains which rule fired.
+    phase: Optional[str] = None
+    phase_reason: Optional[str] = None
     config: Dict[str, Any]
     state: Dict[str, Any]
     progress_pct: float

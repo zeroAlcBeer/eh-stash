@@ -198,6 +198,58 @@ def _normalize_config(task_type: str, config: Dict[str, Any]) -> Dict[str, Any]:
     return merged
 
 
+ACTIVE_JOB_STATES = {"available", "pending", "scheduled", "running", "retryable"}
+
+PHASES = ("disabled", "running", "retrying", "queued", "paused", "failed", "idle")
+
+
+def _derive_phase(item: Dict[str, Any]) -> tuple[str, str]:
+    """Single source of truth for a task's display state.
+
+    Rules are evaluated top-down; phase_reason names the rule that fired so
+    the derivation itself is never a black box. Raw river fields stay
+    available on the model for deep debugging.
+    """
+    enabled = bool(item.get("enabled"))
+    schedule_kind = item.get("schedule_kind")
+    requested_action = item.get("requested_action")
+    cur_state = item.get("current_job_state")
+    cur_attempt = item.get("current_job_attempt")
+    cur_max = item.get("current_job_max_attempts")
+    latest_state = item.get("latest_job_state")
+    last_error = item.get("last_error")
+    checkpoint = dict(item.get("checkpoint") or {})
+    interval = item.get("schedule_interval_sec")
+
+    # An unconsumed user action is worth surfacing regardless of which rule wins.
+    suffix = f" · requested_action={requested_action} pending" if requested_action else ""
+
+    if cur_state == "running":
+        return "running", f"river job #{item.get('current_job_id')} running (attempt {cur_attempt}/{cur_max})" + suffix
+    if cur_state == "retryable":
+        return "retrying", (
+            f"river job #{item.get('current_job_id')} failed, retry scheduled "
+            f"(attempt {cur_attempt}/{cur_max}, at {item.get('current_job_scheduled_at')})"
+        ) + suffix
+    if cur_state in {"available", "pending", "scheduled"}:
+        run_id = checkpoint.get("run_id")
+        chain = f" · slice chain run_id={run_id}" if run_id else ""
+        return "queued", f"river job #{item.get('current_job_id')} waiting for worker (state={cur_state}){chain}" + suffix
+    if requested_action:
+        return "queued", f"requested_action={requested_action} awaiting scheduler pickup (poll ≤5s)"
+    if not enabled:
+        return "disabled", "definition disabled"
+    if latest_state == "discarded":
+        detail = f": {last_error}" if last_error else ""
+        return "failed", f"last river job #{item.get('last_job_id')} discarded (retries exhausted){detail}"
+    if last_error and last_error.startswith("exit: "):
+        return "paused", f"last round ended with {last_error[6:]}; next periodic kick starts a new round"
+    if schedule_kind == "periodic":
+        every = f"{interval}s" if interval else "default interval"
+        return "idle", f"waiting next periodic tick (every {every})"
+    return "idle", "enabled, no job queued"
+
+
 def _legacy_status_for_job_state(job_state: str | None, enabled: bool) -> str:
     if job_state in {"available", "pending", "scheduled", "running", "retryable"}:
         return "running"
@@ -257,6 +309,7 @@ def _task_def_from_row(db, row) -> SyncTask:
     current_job_state = item.get("current_job_state")
     latest_job_state = item.get("latest_job_state")
     schedule_kind = item.get("schedule_kind")
+    phase, phase_reason = _derive_phase(item)
 
     return SyncTask(
         id=item["id"],
@@ -265,6 +318,8 @@ def _task_def_from_row(db, row) -> SyncTask:
         category=_derive_category(source, strategy, scope),
         status=_legacy_status_for_task(current_job_state, latest_job_state, enabled, schedule_kind),
         desired_status="running" if enabled else "stopped",
+        phase=phase,
+        phase_reason=phase_reason,
         config=item.get("config") or {},
         state=checkpoint,
         progress_pct=float(progress.get("pct") or 0),
