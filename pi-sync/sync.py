@@ -25,6 +25,7 @@ gallery_group_members for any gid whose base_title acquired new siblings).
 import logging
 import os
 import signal
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,6 +48,7 @@ R2_KEY_ID       = os.environ["R2_ACCESS_KEY_ID"]
 R2_SECRET       = os.environ["R2_SECRET_ACCESS_KEY"]
 THUMB_DIR       = Path(os.environ.get("THUMB_DIR", "/data/thumbs"))
 CADENCE_SEC     = int(os.environ.get("SYNC_CADENCE_SEC", "300"))
+HEARTBEAT_SEC   = max(1, int(os.environ.get("SYNC_HEARTBEAT_SEC", "60")))
 CHUNK_ROT       = int(os.environ.get("SYNC_CHUNK_ROT", "5000"))
 OUTBOX_BATCH    = int(os.environ.get("SYNC_OUTBOX_BATCH", "500"))
 ONESHOT         = os.environ.get("SYNC_ONESHOT") == "1"
@@ -307,6 +309,148 @@ def pi_finish_run(pi_conn, run_id, status, duration_ms, stats=None, error=None):
         log.exception("failed to finalize cloud sync run id=%s", run_id)
 
 
+# ─── Runtime state & heartbeat ──────────────────────────────────────────────
+
+def pi_runtime_started(pi_conn):
+    with pi_conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE cloud_sync_runtime
+            SET phase = 'starting',
+                worker_started_at = NOW(),
+                heartbeat_at = NOW(),
+                cycle_started_at = NULL,
+                next_run_at = NULL,
+                current_run_id = NULL,
+                cadence_sec = %s,
+                updated_at = NOW()
+            WHERE id = 1
+            """,
+            (CADENCE_SEC,),
+        )
+    pi_conn.commit()
+
+
+def pi_runtime_cycle_started(pi_conn, run_id):
+    with pi_conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE cloud_sync_runtime
+            SET phase = 'running',
+                heartbeat_at = NOW(),
+                cycle_started_at = NOW(),
+                next_run_at = NULL,
+                current_run_id = %s,
+                cadence_sec = %s,
+                updated_at = NOW()
+            WHERE id = 1
+            """,
+            (run_id, CADENCE_SEC),
+        )
+    pi_conn.commit()
+
+
+def pi_runtime_cycle_finished(pi_conn, run_id, succeeded, error=None):
+    error_kind = classify_error(error) if error is not None else None
+    error_message = str(error)[:4000] if error is not None else None
+    with pi_conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE cloud_sync_runtime
+            SET phase = %s,
+                heartbeat_at = NOW(),
+                cycle_started_at = NULL,
+                next_run_at = NOW() + (%s * INTERVAL '1 second'),
+                current_run_id = NULL,
+                last_run_id = COALESCE(%s, last_run_id),
+                last_success_at = CASE WHEN %s THEN NOW() ELSE last_success_at END,
+                consecutive_failures = CASE
+                    WHEN %s THEN 0
+                    ELSE consecutive_failures + 1
+                END,
+                last_error_kind = %s,
+                last_error_message = %s,
+                updated_at = NOW()
+            WHERE id = 1
+            """,
+            (
+                "sleeping" if succeeded else "failed",
+                CADENCE_SEC,
+                run_id,
+                succeeded,
+                succeeded,
+                error_kind,
+                error_message,
+            ),
+        )
+    pi_conn.commit()
+
+
+def pi_runtime_stopped(pi_conn):
+    with pi_conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE cloud_sync_runtime
+            SET phase = 'stopped',
+                heartbeat_at = NOW(),
+                cycle_started_at = NULL,
+                next_run_at = NULL,
+                current_run_id = NULL,
+                updated_at = NOW()
+            WHERE id = 1
+            """
+        )
+    pi_conn.commit()
+
+
+def safe_runtime_update(label, update, *args, **kwargs):
+    try:
+        update(*args, **kwargs)
+    except Exception as error:
+        log.warning("runtime %s update failed: %s", label, error)
+
+
+class RuntimeHeartbeat:
+    def __init__(self):
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run,
+            name="cloud-sync-heartbeat",
+            daemon=True,
+        )
+
+    def start(self):
+        self._thread.start()
+
+    def stop(self):
+        self._stop_event.set()
+        self._thread.join(timeout=5)
+
+    def _run(self):
+        while not self._stop_event.is_set():
+            conn = None
+            try:
+                conn = psycopg2.connect(PI_DSN)
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE cloud_sync_runtime
+                        SET heartbeat_at = NOW(), updated_at = NOW()
+                        WHERE id = 1
+                        """
+                    )
+                conn.commit()
+            except Exception as error:
+                log.warning("runtime heartbeat failed: %s", error)
+            finally:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+            self._stop_event.wait(HEARTBEAT_SEC)
+
+
 # ─── Neon helpers ───────────────────────────────────────────────────────────
 
 def neon_fetch_summary(neon_conn, gids):
@@ -554,55 +698,110 @@ def run_cycle(pi_conn, neon_conn):
 
 def main():
     log.info(
-        "pi-sync starting: cadence=%ds rot=%d outbox_batch=%d thumbs=%s",
-        CADENCE_SEC, CHUNK_ROT, OUTBOX_BATCH, THUMB_DIR,
+        "pi-sync starting: cadence=%ds heartbeat=%ds rot=%d "
+        "outbox_batch=%d thumbs=%s",
+        CADENCE_SEC, HEARTBEAT_SEC, CHUNK_ROT, OUTBOX_BATCH, THUMB_DIR,
     )
+    heartbeat = RuntimeHeartbeat()
+    startup_conn = None
+    try:
+        startup_conn = psycopg2.connect(PI_DSN)
+        pi_runtime_started(startup_conn)
+    except Exception as error:
+        log.warning("failed to initialize runtime state: %s", error)
+    finally:
+        if startup_conn is not None:
+            startup_conn.close()
+    heartbeat.start()
+
     first_cycle = True
-    while not _stopping:
-        t0 = time.monotonic()
-        pi = neon = None
-        run_id = None
-        stats = CycleStats()
-        try:
-            pi   = psycopg2.connect(PI_DSN)
-            if ONESHOT:
-                trigger = "oneshot"
-            elif first_cycle:
-                trigger = "startup"
-            else:
-                trigger = "scheduled"
-            run_id = pi_start_run(pi, trigger)
-            # TCP keepalives so Neon-side drops surface quickly instead of
-            # appearing alive until the first write.
-            neon = psycopg2.connect(
-                NEON_DSN,
-                keepalives=1, keepalives_idle=30,
-                keepalives_interval=10, keepalives_count=3,
-            )
-            stats = run_cycle(pi, neon)
-            elapsed_ms = round((time.monotonic() - t0) * 1000)
-            pi_finish_run(pi, run_id, "succeeded", elapsed_ms, stats=stats)
-        except Exception as e:
-            log.exception("cycle failed: %s", e)
-            if pi is not None and run_id is not None:
-                elapsed_ms = round((time.monotonic() - t0) * 1000)
-                pi_finish_run(
-                    pi, run_id, "failed", elapsed_ms, stats=stats, error=e
+    try:
+        while not _stopping:
+            t0 = time.monotonic()
+            pi = neon = None
+            run_id = None
+            stats = CycleStats()
+            try:
+                pi = psycopg2.connect(PI_DSN)
+                if ONESHOT:
+                    trigger = "oneshot"
+                elif first_cycle:
+                    trigger = "startup"
+                else:
+                    trigger = "scheduled"
+                run_id = pi_start_run(pi, trigger)
+                safe_runtime_update(
+                    "cycle-started",
+                    pi_runtime_cycle_started,
+                    pi,
+                    run_id,
                 )
+                # TCP keepalives so Neon-side drops surface quickly instead of
+                # appearing alive until the first write.
+                neon = psycopg2.connect(
+                    NEON_DSN,
+                    keepalives=1, keepalives_idle=30,
+                    keepalives_interval=10, keepalives_count=3,
+                )
+                stats = run_cycle(pi, neon)
+                elapsed_ms = round((time.monotonic() - t0) * 1000)
+                pi_finish_run(pi, run_id, "succeeded", elapsed_ms, stats=stats)
+                safe_runtime_update(
+                    "cycle-finished",
+                    pi_runtime_cycle_finished,
+                    pi,
+                    run_id,
+                    succeeded=True,
+                )
+            except Exception as error:
+                log.exception("cycle failed: %s", error)
+                if pi is not None:
+                    if run_id is not None:
+                        elapsed_ms = round((time.monotonic() - t0) * 1000)
+                        pi_finish_run(
+                            pi,
+                            run_id,
+                            "failed",
+                            elapsed_ms,
+                            stats=stats,
+                            error=error,
+                        )
+                    else:
+                        pi.rollback()
+                    safe_runtime_update(
+                        "cycle-failed",
+                        pi_runtime_cycle_finished,
+                        pi,
+                        run_id,
+                        succeeded=False,
+                        error=error,
+                    )
+            finally:
+                for conn in (pi, neon):
+                    if conn is not None:
+                        try:
+                            conn.close()
+                        except Exception:
+                            pass
+            first_cycle = False
+            elapsed = time.monotonic() - t0
+            if _stopping or ONESHOT:
+                suffix = " (oneshot, exiting)" if ONESHOT else ""
+                log.info("cycle done in %.1fs%s", elapsed, suffix)
+                break
+            log.info("cycle done in %.1fs, sleeping %ds", elapsed, CADENCE_SEC)
+            _interruptible_sleep(CADENCE_SEC)
+    finally:
+        heartbeat.stop()
+        stop_conn = None
+        try:
+            stop_conn = psycopg2.connect(PI_DSN)
+            pi_runtime_stopped(stop_conn)
+        except Exception as error:
+            log.warning("failed to mark runtime stopped: %s", error)
         finally:
-            for c in (pi, neon):
-                if c is not None:
-                    try:
-                        c.close()
-                    except Exception:
-                        pass
-        first_cycle = False
-        elapsed = time.monotonic() - t0
-        if _stopping or ONESHOT:
-            log.info("cycle done in %.1fs%s", elapsed, " (oneshot, exiting)" if ONESHOT else "")
-            break
-        log.info("cycle done in %.1fs, sleeping %ds", elapsed, CADENCE_SEC)
-        _interruptible_sleep(CADENCE_SEC)
+            if stop_conn is not None:
+                stop_conn.close()
     log.info("pi-sync stopped")
 
 
