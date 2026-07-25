@@ -17,12 +17,21 @@ Task Definition (sync_task_defs)  ───►  River Job (river_job)
 | 调度层 | `schedule_kind`, `schedule_interval_sec`, `enabled`, `requested_action` | 说明是 admin 手动 enqueue，还是 periodic 自动 enqueue。`requested_action` 是用户操作未消费时的临时槽位（start / stop / retry）。 | 随定义变化。 |
 | 执行层 | `river_job.kind`, `state`, `attempt`, `max_attempts`, `args`, `errors` | River 原生 job 执行状态。Admin 直接展示。 | 每次执行一条 job，完成 / 取消 / 失败后成为历史。 |
 
-Job kind 共 4 种：
+Job kind 共 6 种：
 
-- `ehstash_full_sync`
-- `ehstash_incremental_sync`（kick / 路由器）
+- `ehstash_full_sync`（kick / 路由器，manual 触发）
+- `ehstash_full_slice`（每片实干）
+- `ehstash_incremental_sync`（kick / 路由器，periodic 触发）
 - `ehstash_incremental_slice`（每片实干）
 - `ehstash_favorites_sync`
+- `ehstash_refresh_detail`
+
+Full 与 incremental 共用同一套 kick/slice chain 模型（run_id 串链、stale
+slice self-drop、单页一 job）。差异只在调度与退出语义：full 是 manual，
+没有 periodic kick 兜底，所以 BANNED/ERROR 不清 run_id，而是保留 cursor、
+用 `ScheduledAt = now + 5min` 延迟投递下一片原地续链；END 后置 `done=true`
+并 disable 定义。scraper 重启时运行中的 full slice 由 River 重试恢复，
+run_id 吻合则自动续跑，无需人工重启任务。
 
 ## 2. River 原生状态如何出现在 Admin
 

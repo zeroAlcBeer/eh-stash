@@ -10,87 +10,149 @@ import (
 	"github.com/zeroAlcBeer/eh-stash/scraper-go/parser"
 )
 
-// RunFullOnce runs one iteration of the full sync task. Returns (done, error);
-// done=true means the round completed and the manual-schedule def should be
-// disabled by the caller (MarkTaskDefFinished with terminal=true).
-func RunFullOnce(
+// FullCheckpoint is the typed shape of a full sync task's checkpoint JSONB.
+// Like incremental, one round is a run_id-chained series of one-page slices.
+// Unlike incremental (periodic), full is manual: BANNED/ERROR must not drop
+// the cursor — the worker keeps the chain alive with a delayed next slice.
+type FullCheckpoint struct {
+	RunID      string  // "" = no chain in flight
+	NextGID    *string // EH list pagination cursor; nil = start of list
+	Round      int
+	Done       bool
+	AnchorGID  int64 // max gid on the first page of the round; 0 = unset
+	TotalCount int   // best-known category total from list pages; 0 = unknown
+	DBCount    int   // galleries already in DB for this category; 0 = unknown
+}
+
+func FullCheckpointFromMap(m map[string]any) FullCheckpoint {
+	cp := FullCheckpoint{
+		NextGID:    getStateString(m, "next_gid"),
+		Round:      getStateInt(m, "round"),
+		Done:       getStateBool(m, "done"),
+		AnchorGID:  int64(getStateFloat(m, "anchor_gid")),
+		TotalCount: getStateInt(m, "total_count"),
+		DBCount:    getStateInt(m, "db_count"),
+	}
+	if s, ok := m["run_id"].(string); ok {
+		cp.RunID = s
+	}
+	return cp
+}
+
+// ToMap renders the exact JSONB shape the API and frontend read, explicit
+// nulls included.
+func (c FullCheckpoint) ToMap() map[string]any {
+	m := map[string]any{
+		"run_id":      nil,
+		"next_gid":    nil,
+		"anchor_gid":  nil,
+		"total_count": nil,
+		"db_count":    nil,
+		"round":       c.Round,
+		"done":        c.Done,
+	}
+	if c.RunID != "" {
+		m["run_id"] = c.RunID
+	}
+	if c.NextGID != nil {
+		m["next_gid"] = *c.NextGID
+	}
+	if c.AnchorGID > 0 {
+		m["anchor_gid"] = c.AnchorGID
+	}
+	if c.TotalCount > 0 {
+		m["total_count"] = c.TotalCount
+	}
+	if c.DBCount > 0 {
+		m["db_count"] = c.DBCount
+	}
+	return m
+}
+
+// FullSliceStats summarizes one slice's page for the task event timeline.
+type FullSliceStats struct {
+	Items    int
+	Upserted int
+	Deleted  int
+}
+
+// FullSliceResult is what RunFullSlice returns to the worker so it can decide
+// whether to chain the next slice immediately, resume later (BANNED/ERROR), or
+// finalize the round.
+type FullSliceResult struct {
+	ExitReason string // "" = continue, "END" = round complete, "BANNED"/"ERROR" = delayed resume
+	Checkpoint FullCheckpoint
+	Pct        float64
+	Stats      FullSliceStats
+}
+
+// RunFullSlice fetches exactly one page of the full category scan and detail-
+// fetches every item on it. The worker persists the checkpoint and decides the
+// next action. Stop is signaled via ctx cancellation.
+func RunFullSlice(
 	ctx context.Context,
 	database *db.DB,
 	httpClient *client.Client,
 	def *db.TaskDef,
 	grouperTrigger chan struct{},
-) (bool, error) {
+) (FullSliceResult, error) {
 	name := def.Name
 	category := fullCategory(def)
-	taskID := def.ID
 
-	checkpoint := cloneState(def.Checkpoint)
-
-	if getStateBool(checkpoint, "done") {
-		checkpoint = map[string]any{
-			"next_gid":    nil,
-			"round":       0,
-			"done":        false,
-			"anchor_gid":  nil,
-			"total_count": nil,
-		}
-	}
-
-	nextCursor := getStateString(checkpoint, "next_gid")
+	cp := FullCheckpointFromMap(def.Checkpoint)
+	result := FullSliceResult{Checkpoint: cp, Pct: fullProgress(ctx, database, cp, category)}
 
 	slog.Info(fmt.Sprintf("[FULL ] [%s] category=%s fetching", name, category),
-		"next_gid", nextCursor)
+		"next_gid", cp.NextGID)
 
-	listURL := BuildListURL(httpClient.BaseURL(), []string{category}, nextCursor)
-	body, result, err := httpClient.FetchPage(ctx, listURL)
-	if err != nil {
-		slog.Warn(fmt.Sprintf("[FULL ] [%s] fetch_list_page failed, will retry", name), "error", err)
-		_ = database.UpdateTaskDefCheckpoint(ctx, taskID, checkpoint, fullProgress(checkpoint, category, database, ctx), "", true)
-		return false, nil
+	if err := ctx.Err(); err != nil {
+		return result, err
 	}
 
-	if result == client.ResultBanned {
+	listURL := BuildListURL(httpClient.BaseURL(), []string{category}, cp.NextGID)
+	body, fetchResult, err := httpClient.FetchPage(ctx, listURL)
+	if err != nil {
+		slog.Warn(fmt.Sprintf("[FULL ] [%s] fetch_list_page failed", name), "error", err)
+		result.ExitReason = "ERROR"
+		return result, nil
+	}
+	if fetchResult == client.ResultBanned {
 		slog.Warn(fmt.Sprintf("[FULL ] [%s] IP temporarily banned", name))
-		_ = database.UpdateTaskDefCheckpoint(ctx, taskID, checkpoint, 0, "IP temporarily banned, will retry when ban expires", false)
-		return false, nil
+		result.ExitReason = "BANNED"
+		return result, nil
 	}
 
 	listResult, err := parser.ParseGalleryList(body)
 	if err != nil {
 		slog.Error(fmt.Sprintf("[FULL ] [%s] parse list page failed", name), "error", err)
-		_ = database.UpdateTaskDefCheckpoint(ctx, taskID, checkpoint, 0, "", true)
-		return false, nil
+		result.ExitReason = "ERROR"
+		return result, nil
 	}
 
-	if len(listResult.Items) > 0 && checkpoint["anchor_gid"] == nil {
+	if len(listResult.Items) > 0 && result.Checkpoint.AnchorGID == 0 {
 		maxGID := listResult.Items[0].GID
 		for _, item := range listResult.Items {
 			if item.GID > maxGID {
 				maxGID = item.GID
 			}
 		}
-		checkpoint["anchor_gid"] = float64(maxGID)
+		result.Checkpoint.AnchorGID = maxGID
 	}
 
-	if listResult.TotalCount != nil {
-		existing := getStateInt(checkpoint, "total_count")
-		if *listResult.TotalCount > existing {
-			checkpoint["total_count"] = float64(*listResult.TotalCount)
-		}
+	if listResult.TotalCount != nil && *listResult.TotalCount > result.Checkpoint.TotalCount {
+		result.Checkpoint.TotalCount = *listResult.TotalCount
 	}
 
-	slog.Info(fmt.Sprintf("[FULL ] [%s] category=%s page_items=%d next_gid=%v total_count=%v",
-		name, category, len(listResult.Items), listResult.NextCursor, checkpoint["total_count"]))
+	slog.Info(fmt.Sprintf("[FULL ] [%s] category=%s page_items=%d next_gid=%v total_count=%d",
+		name, category, len(listResult.Items), listResult.NextCursor, result.Checkpoint.TotalCount))
 
 	var rowsToUpsert []db.GalleryRow
 	var commentBatches []CommentBatch
 	nDeleted := 0
 
 	for _, item := range listResult.Items {
-		select {
-		case <-ctx.Done():
-			return false, ctx.Err()
-		default:
+		if err := ctx.Err(); err != nil {
+			return result, err
 		}
 
 		if item.IsDeleted {
@@ -105,8 +167,8 @@ func RunFullOnce(
 		}
 		if detailResult == client.ResultBanned {
 			slog.Warn(fmt.Sprintf("[FULL ] [%s] gid=%d IP banned during detail fetch", name, item.GID))
-			_ = database.UpdateTaskDefCheckpoint(ctx, taskID, checkpoint, 0, "IP temporarily banned, will retry when ban expires", false)
-			return false, nil
+			result.ExitReason = "BANNED"
+			return result, nil
 		}
 
 		detail, err := parser.ParseDetail(detailBody)
@@ -123,48 +185,35 @@ func RunFullOnce(
 		})
 	}
 
+	result.Stats = FullSliceStats{Items: len(listResult.Items), Upserted: len(rowsToUpsert), Deleted: nDeleted}
+
 	slog.Info(fmt.Sprintf("[FULL ] [%s] page_items=%d upsert=%d deleted=%d",
 		name, len(listResult.Items), len(rowsToUpsert), nDeleted))
 
 	if len(rowsToUpsert) > 0 {
 		if _, err := database.UpsertGalleriesBulk(ctx, rowsToUpsert); err != nil {
-			return false, fmt.Errorf("upsert galleries: %w", err)
+			return result, fmt.Errorf("upsert galleries: %w", err)
 		}
 		FlushCommentBatches(ctx, database, commentBatches)
 		notify(grouperTrigger)
 	}
 
-	done := len(listResult.Items) == 0 || listResult.NextCursor == nil
-	roundNum := getStateInt(checkpoint, "round")
-
-	if done {
-		checkpoint["next_gid"] = nil
-		checkpoint["round"] = float64(roundNum + 1)
-		checkpoint["done"] = true
-		_ = database.UpdateTaskDefCheckpoint(ctx, taskID, checkpoint, 100, "", true)
-		slog.Info(fmt.Sprintf("[FULL ] [%s] completed round=%d", name, roundNum+1))
-		return true, nil
+	if len(listResult.Items) == 0 || listResult.NextCursor == nil {
+		result.ExitReason = "END"
+		result.Pct = 100
+		return result, nil
 	}
 
-	checkpoint["next_gid"] = *listResult.NextCursor
-	checkpoint["done"] = false
+	result.Checkpoint.NextGID = listResult.NextCursor
 
 	dbCount, _ := database.CountGalleriesByCategory(ctx, category)
-	checkpoint["db_count"] = float64(dbCount)
-
-	tc := getStateInt(checkpoint, "total_count")
-	var tcPtr *int
-	if tc > 0 {
-		tcPtr = &tc
-	}
-	progressPct := CalcFullProgress(dbCount, tcPtr, false)
+	result.Checkpoint.DBCount = dbCount
+	result.Pct = fullProgress(ctx, database, result.Checkpoint, category)
 
 	slog.Info(fmt.Sprintf("[FULL ] [%s] upserted=%d db_count=%d progress=%.2f%%",
-		name, len(rowsToUpsert), dbCount, progressPct))
+		name, len(rowsToUpsert), dbCount, result.Pct))
 
-	_ = database.UpdateTaskDefCheckpoint(ctx, taskID, checkpoint, progressPct, "", true)
-
-	return false, nil
+	return result, nil
 }
 
 func fullCategory(def *db.TaskDef) string {
@@ -174,13 +223,13 @@ func fullCategory(def *db.TaskDef) string {
 	return ""
 }
 
-// fullProgress is a best-effort pct for transient failure paths where we don't
-// have the latest list response. Falls back to whatever is in checkpoint.
-func fullProgress(checkpoint map[string]any, category string, database *db.DB, ctx context.Context) float64 {
-	tc := getStateInt(checkpoint, "total_count")
-	if tc <= 0 {
+// fullProgress is a best-effort pct: db coverage of the best-known category
+// total. Returns 0 while the total is still unknown.
+func fullProgress(ctx context.Context, database *db.DB, cp FullCheckpoint, category string) float64 {
+	if cp.TotalCount <= 0 {
 		return 0
 	}
 	dbCount, _ := database.CountGalleriesByCategory(ctx, category)
+	tc := cp.TotalCount
 	return CalcFullProgress(dbCount, &tc, false)
 }

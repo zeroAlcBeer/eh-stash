@@ -144,7 +144,8 @@ function formatTaskSchedule(task) {
 function formatJobKind(value) {
   if (value === 'ehstash_incremental_sync') return 'incremental kick';
   if (value === 'ehstash_incremental_slice') return 'incremental slice';
-  if (value === 'ehstash_full_sync') return 'full sync';
+  if (value === 'ehstash_full_sync') return 'full kick';
+  if (value === 'ehstash_full_slice') return 'full slice';
   if (value === 'ehstash_favorites_sync') return 'favorites sync';
   if (value === 'ehstash_refresh_detail') return 'refresh detail';
   return value || 'none';
@@ -537,6 +538,7 @@ const EVENT_TYPE_STYLES = {
   'round.finished': 'text-emerald-400',
   'round.paused': 'text-amber-300',
   'slice.done': 'text-cyan-300',
+  'slice.rescheduled': 'text-amber-300',
   'batch.done': 'text-cyan-300',
   'job.queued': 'text-sky-300',
   'job.cancel_requested': 'text-amber-300',

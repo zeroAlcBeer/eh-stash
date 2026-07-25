@@ -28,6 +28,9 @@ const (
 	SliceMaxAttempts     = 2
 	EventPruneInterval   = 1 * time.Hour
 	EventRetentionWindow = 30 * 24 * time.Hour
+	// FullResumeDelay spaces the next full slice after BANNED/ERROR. Full is
+	// manual (no periodic kick to restart it), so the chain resumes itself.
+	FullResumeDelay = 5 * time.Minute
 )
 
 type FullSyncArgs struct {
@@ -35,6 +38,15 @@ type FullSyncArgs struct {
 }
 
 func (FullSyncArgs) Kind() string { return "ehstash_full_sync" }
+
+// FullSliceArgs is one page's worth of full sync work, chained exactly like
+// incremental slices. See IncrementalSliceArgs for the run_id semantics.
+type FullSliceArgs struct {
+	TaskID int    `json:"task_id"`
+	RunID  string `json:"run_id"`
+}
+
+func (FullSliceArgs) Kind() string { return "ehstash_full_slice" }
 
 type IncrementalSyncArgs struct {
 	TaskID int `json:"task_id" river:"unique"`
@@ -72,11 +84,24 @@ type fullSyncWorker struct {
 }
 
 func (w *fullSyncWorker) Work(ctx context.Context, job *river.Job[FullSyncArgs]) error {
-	return w.s.workFull(ctx, job.Args.TaskID, job.ID)
+	return w.s.workFullKick(ctx, job.Args.TaskID, job.ID)
 }
 
 func (w *fullSyncWorker) Timeout(*river.Job[FullSyncArgs]) time.Duration {
-	return -1
+	return KickJobTimeout
+}
+
+type fullSliceWorker struct {
+	river.WorkerDefaults[FullSliceArgs]
+	s *Scheduler
+}
+
+func (w *fullSliceWorker) Work(ctx context.Context, job *river.Job[FullSliceArgs]) error {
+	return w.s.workFullSlice(ctx, job.Args.TaskID, job.Args.RunID, job.ID)
+}
+
+func (w *fullSliceWorker) Timeout(*river.Job[FullSliceArgs]) time.Duration {
+	return SliceJobTimeout
 }
 
 type incrementalSyncWorker struct {
@@ -303,6 +328,7 @@ func (s *Scheduler) newRiverClient(ctx context.Context) (*river.Client[pgx.Tx], 
 
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &fullSyncWorker{s: s})
+	river.AddWorker(workers, &fullSliceWorker{s: s})
 	river.AddWorker(workers, &incrementalSyncWorker{s: s})
 	river.AddWorker(workers, &incrementalSliceWorker{s: s})
 	river.AddWorker(workers, &favoritesSyncWorker{s: s})
@@ -456,7 +482,7 @@ func (s *Scheduler) enqueueTaskDef(ctx context.Context, riverClient *river.Clien
 	var err error
 	switch {
 	case def.Source == "gallery_list" && def.Strategy == "full":
-		res, insertErr := riverClient.Insert(ctx, FullSyncArgs{TaskID: def.ID}, uniqueInsertOpts())
+		res, insertErr := riverClient.Insert(ctx, FullSyncArgs{TaskID: def.ID}, activeUniqueInsertOpts())
 		err = insertErr
 		if res != nil && res.Job != nil {
 			jobID = res.Job.ID
@@ -542,39 +568,176 @@ func (s *Scheduler) retryTaskDef(ctx context.Context, riverClient *river.Client[
 	_ = s.db.InsertTaskEvent(ctx, def.ID, &jobID, "job.retry_requested", "job retry requested", nil)
 }
 
-func (s *Scheduler) workFull(ctx context.Context, taskID int, jobID int64) error {
-	slog.Info("[FULL ] entered", "task_id", taskID, "job_id", jobID)
-	if err := s.db.MarkTaskDefQueued(ctx, taskID, jobID); err != nil {
-		slog.Error("[FULL ] mark current failed", "task_id", taskID, "job_id", jobID, "error", err)
+// workFullKick starts (or resumes) a full sync slice chain. Mirrors the
+// incremental kick, but full is manual: a finished round resets state for a
+// fresh scan, while an interrupted round keeps its cursor and resumes.
+func (s *Scheduler) workFullKick(ctx context.Context, taskID int, jobID int64) error {
+	slog.Info("[FULL ] kick entered", "task_id", taskID, "job_id", jobID)
+	def, err := s.db.GetTaskDef(ctx, taskID)
+	if err != nil {
+		slog.Error("[FULL ] kick get def failed", "task_id", taskID, "error", err)
+		return err
 	}
-	for {
-		def, err := s.db.GetTaskDef(ctx, taskID)
+	if !def.Enabled {
+		slog.Info("[FULL ] kick skip: def disabled", "task_id", taskID)
+		return nil
+	}
+	if err := task.ValidateFullTask(def); err != nil {
+		slog.Warn("[FULL ] kick validate failed", "task_id", taskID, "error", err)
+		_ = s.db.MarkTaskDefFinished(ctx, taskID, jobID, def.Checkpoint, 0, true, err.Error())
+		return err
+	}
+
+	cp := task.FullCheckpointFromMap(def.Checkpoint)
+	if cp.RunID != "" && def.CurrentJobID != nil {
+		slog.Info("[FULL ] kick skip: chain in flight",
+			"task_id", taskID,
+			"run_id", cp.RunID,
+			"current_job_id", *def.CurrentJobID,
+		)
+		return nil
+	}
+
+	if cp.Done {
+		// Last round completed — start a fresh scan from the top.
+		cp = task.FullCheckpoint{}
+	}
+	newRunID := strconv.FormatInt(time.Now().UnixNano(), 10)
+	cp.RunID = newRunID
+	pct := 0.0
+	if v, ok := def.Progress["pct"].(float64); ok {
+		pct = v
+	}
+	if err := s.db.UpdateTaskDefCheckpoint(ctx, taskID, cp.ToMap(), pct, "", true); err != nil {
+		slog.Error("[FULL ] kick persist new run_id failed", "task_id", taskID, "error", err)
+		return err
+	}
+	slog.Info("[FULL ] kick starting chain", "task_id", taskID, "run_id", newRunID, "resume_cursor", cp.NextGID != nil)
+
+	res, err := s.riverClient.Insert(ctx, FullSliceArgs{TaskID: taskID, RunID: newRunID}, sliceInsertOpts())
+	if err != nil {
+		slog.Error("[FULL ] kick enqueue first slice failed", "task_id", taskID, "run_id", newRunID, "error", err)
+		return fmt.Errorf("enqueue first full slice: %w", err)
+	}
+	if res != nil && res.Job != nil {
+		_ = s.db.MarkTaskDefQueued(ctx, taskID, res.Job.ID)
+		_ = s.db.InsertTaskEvent(ctx, taskID, &res.Job.ID, "round.started", "full round started", map[string]any{
+			"run_id": newRunID,
+			"resume": cp.NextGID != nil,
+		})
+	}
+	return nil
+}
+
+func (s *Scheduler) workFullSlice(ctx context.Context, taskID int, runID string, jobID int64) error {
+	slog.Info("[FULL ] slice entered", "task_id", taskID, "job_id", jobID, "run_id", runID)
+	def, err := s.db.GetTaskDef(ctx, taskID)
+	if err != nil {
+		slog.Error("[FULL ] slice get def failed", "task_id", taskID, "job_id", jobID, "error", err)
+		return err
+	}
+	if !def.Enabled {
+		slog.Info("[FULL ] slice skip: def disabled", "task_id", taskID, "job_id", jobID)
+		_ = s.db.ClearTaskDefCurrentJob(context.Background(), taskID, jobID)
+		return nil
+	}
+	if cur := task.FullCheckpointFromMap(def.Checkpoint).RunID; cur != runID {
+		slog.Info("[FULL ] slice dropped: stale run_id",
+			"task_id", taskID,
+			"job_id", jobID,
+			"slice_run", runID,
+			"current_run", cur,
+		)
+		_ = s.db.ClearTaskDefCurrentJob(context.Background(), taskID, jobID)
+		return nil
+	}
+	if err := s.db.MarkTaskDefQueued(ctx, taskID, jobID); err != nil {
+		slog.Error("[FULL ] slice mark current failed", "task_id", taskID, "job_id", jobID, "error", err)
+	}
+	if err := task.ValidateFullTask(def); err != nil {
+		slog.Warn("[FULL ] slice validate failed", "task_id", taskID, "job_id", jobID, "error", err)
+		_ = s.db.MarkTaskDefFinished(context.Background(), taskID, jobID, def.Checkpoint, 0, true, err.Error())
+		return err
+	}
+
+	sliceStart := time.Now()
+	result, runErr := task.RunFullSlice(ctx, s.db, s.client, def, s.signals.GrouperTrigger)
+	sliceDur := time.Since(sliceStart)
+	if runErr != nil {
+		// Leave the checkpoint (and its run_id) untouched: a user cancel ends
+		// as a cancelled job, while a restart-rescued retry re-enters with a
+		// matching run_id and resumes the cursor.
+		slog.Warn("[FULL ] slice interrupted", "task_id", taskID, "job_id", jobID, "run_id", runID, "error", runErr)
+		return runErr
+	}
+
+	_ = s.db.InsertTaskEvent(context.Background(), taskID, &jobID, "slice.done", "full slice done", map[string]any{
+		"run_id":      runID,
+		"exit_reason": result.ExitReason,
+		"items":       result.Stats.Items,
+		"upserted":    result.Stats.Upserted,
+		"deleted":     result.Stats.Deleted,
+		"pct":         result.Pct,
+		"duration_ms": sliceDur.Milliseconds(),
+	})
+
+	cp := result.Checkpoint
+	switch result.ExitReason {
+	case "END":
+		cp.RunID = ""
+		cp.NextGID = nil
+		cp.Done = true
+		cp.Round++
+		_ = s.db.MarkTaskDefFinished(context.Background(), taskID, jobID, cp.ToMap(), 100, true, "")
+		_ = s.db.InsertTaskEvent(context.Background(), taskID, &jobID, "round.finished", "full round finished", map[string]any{
+			"run_id": runID,
+		})
+		slog.Info("[FULL ] slice round finished", "task_id", taskID, "job_id", jobID, "run_id", runID, "round", cp.Round)
+		return nil
+	case "BANNED", "ERROR":
+		// Keep the cursor and run_id; resume the chain after a delay. Full has
+		// no periodic kick, so pausing here would strand the round.
+		msg := "exit: " + result.ExitReason + ", resuming in " + FullResumeDelay.String()
+		if err := s.db.UpdateTaskDefCheckpoint(context.Background(), taskID, cp.ToMap(), result.Pct, msg, false); err != nil {
+			slog.Error("[FULL ] slice persist checkpoint failed", "task_id", taskID, "job_id", jobID, "error", err)
+			return fmt.Errorf("persist full slice checkpoint: %w", err)
+		}
+		res, err := s.riverClient.Insert(context.Background(), FullSliceArgs{TaskID: taskID, RunID: runID}, sliceResumeOpts(FullResumeDelay))
 		if err != nil {
-			slog.Error("[FULL ] get def failed", "task_id", taskID, "job_id", jobID, "error", err)
-			return err
+			slog.Error("[FULL ] slice enqueue resume failed", "task_id", taskID, "job_id", jobID, "run_id", runID, "error", err)
+			return fmt.Errorf("enqueue full resume slice: %w", err)
 		}
-		if err := task.ValidateFullTask(def); err != nil {
-			slog.Warn("[FULL ] validate failed", "task_id", taskID, "job_id", jobID, "error", err)
-			_ = s.db.MarkTaskDefFinished(ctx, taskID, jobID, def.Checkpoint, 0, true, err.Error())
-			return err
+		if res != nil && res.Job != nil {
+			_ = s.db.MarkTaskDefQueued(context.Background(), taskID, res.Job.ID)
+			_ = s.db.InsertTaskEvent(context.Background(), taskID, &res.Job.ID, "slice.rescheduled", "full slice rescheduled", map[string]any{
+				"run_id": runID,
+				"reason": result.ExitReason,
+				"delay":  FullResumeDelay.String(),
+			})
 		}
-		done, err := task.RunFullOnce(ctx, s.db, s.client, def, s.signals.GrouperTrigger)
+		slog.Warn("[FULL ] slice rescheduled", "task_id", taskID, "job_id", jobID, "run_id", runID, "reason", result.ExitReason, "delay", FullResumeDelay)
+		return nil
+	default:
+		if err := s.db.UpdateTaskDefCheckpoint(context.Background(), taskID, cp.ToMap(), result.Pct, "", false); err != nil {
+			slog.Error("[FULL ] slice persist checkpoint failed", "task_id", taskID, "job_id", jobID, "error", err)
+			return fmt.Errorf("persist full slice checkpoint: %w", err)
+		}
+		res, err := s.riverClient.Insert(context.Background(), FullSliceArgs{TaskID: taskID, RunID: runID}, sliceInsertOpts())
 		if err != nil {
-			slog.Error("[FULL ] run error", "task_id", taskID, "job_id", jobID, "error", err)
-			_ = s.db.MarkTaskDefFinished(context.Background(), taskID, jobID, def.Checkpoint, 0, true, err.Error())
-			return err
+			slog.Error("[FULL ] slice enqueue next failed", "task_id", taskID, "job_id", jobID, "run_id", runID, "error", err)
+			return fmt.Errorf("enqueue next full slice: %w", err)
 		}
-		if done {
-			slog.Info("[FULL ] finished", "task_id", taskID, "job_id", jobID)
-			return s.db.MarkTaskDefFinished(ctx, taskID, jobID, def.Checkpoint, 100, true, "")
+		if res != nil && res.Job != nil {
+			slog.Info("[FULL ] slice chained next",
+				"task_id", taskID,
+				"job_id", jobID,
+				"next_job_id", res.Job.ID,
+				"run_id", runID,
+				"pct", result.Pct,
+			)
+			_ = s.db.MarkTaskDefQueued(context.Background(), taskID, res.Job.ID)
 		}
-		select {
-		case <-ctx.Done():
-			slog.Warn("[FULL ] cancelled by ctx", "task_id", taskID, "job_id", jobID, "ctx_err", ctx.Err())
-			_ = s.db.MarkTaskDefFinished(context.Background(), taskID, jobID, def.Checkpoint, 0, true, ctx.Err().Error())
-			return ctx.Err()
-		default:
-		}
+		return nil
 	}
 }
 
@@ -772,6 +935,14 @@ func sliceInsertOpts() *river.InsertOpts {
 		Queue:       RiverQueue,
 		MaxAttempts: SliceMaxAttempts,
 	}
+}
+
+// sliceResumeOpts delays the next slice, used to wait out bans/transient
+// errors on manual chains that have no periodic kick to revive them.
+func sliceResumeOpts(delay time.Duration) *river.InsertOpts {
+	opts := sliceInsertOpts()
+	opts.ScheduledAt = time.Now().Add(delay)
+	return opts
 }
 
 func (s *Scheduler) workFavorites(ctx context.Context, taskID int, jobID int64) error {
