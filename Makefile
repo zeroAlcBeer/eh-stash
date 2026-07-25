@@ -8,6 +8,10 @@
 # Private registry on NAS. Override: make push REGISTRY_URL=x.x.x.x:5000
 REGISTRY_URL ?= 192.168.0.110:5000
 
+# Compose command. v2 plugin syntax — docker-compose v1 is not installed on
+# the Pi, so recipes must never shell out to the hyphenated binary.
+COMPOSE ?= docker compose
+
 # docker-compose service names
 API_SERVICE     := api
 SCRAPER_SERVICE := scraper
@@ -44,19 +48,19 @@ LOCAL_PI_SYNC_IMAGE  := $(PROJECT_NAME)-$(PI_SYNC_SERVICE)
 # Build all custom images (api, scraper, frontend, pi-sync)
 build:
 	@echo "--> Building Docker images..."
-	docker-compose build
+	$(COMPOSE) build
 	@echo "--> Building pi-sync image (standalone)..."
 	docker build -t $(LOCAL_PI_SYNC_IMAGE):latest ./pi-sync
 
 # Start all services in detached mode
 up:
 	@echo "--> Starting all services..."
-	docker-compose up -d
+	$(COMPOSE) up -d
 
 # Stop and remove all services (data volume preserved)
 down:
 	@echo "--> Stopping all services..."
-	docker-compose down
+	$(COMPOSE) down
 
 # Restart all services
 restart: down up
@@ -64,22 +68,22 @@ restart: down up
 # Rebuild and restart changed services without full down
 dev-rebuild:
 	@echo "--> Rebuilding and restarting scraper, api, frontend..."
-	docker-compose stop scraper api frontend
-	docker-compose rm -f scraper api frontend
-	docker-compose up -d --build scraper api frontend
+	$(COMPOSE) stop scraper api frontend
+	$(COMPOSE) rm -f scraper api frontend
+	$(COMPOSE) up -d --build scraper api frontend
 
 # Tail logs from all services
 logs:
-	docker-compose logs -f
+	$(COMPOSE) logs -f
 
 logs-api:
-	docker-compose logs -f api
+	$(COMPOSE) logs -f api
 
 logs-scraper:
-	docker-compose logs -f scraper
+	$(COMPOSE) logs -f scraper
 
 logs-frontend:
-	docker-compose logs -f frontend
+	$(COMPOSE) logs -f frontend
 
 
 # --- Deployment to NAS Registry ---
@@ -115,13 +119,13 @@ release-component:
 	case "$(COMPONENT)" in \
 		api) \
 			LOCAL="$(LOCAL_API_IMAGE)"; REMOTE="$(API_IMAGE)"; \
-			docker-compose build $(API_SERVICE) ;; \
+			$(COMPOSE) build $(API_SERVICE) ;; \
 		scraper) \
 			LOCAL="$(LOCAL_SCRAPER_IMAGE)"; REMOTE="$(SCRAPER_IMAGE)"; \
-			docker-compose build $(SCRAPER_SERVICE) ;; \
+			$(COMPOSE) build $(SCRAPER_SERVICE) ;; \
 		frontend) \
 			LOCAL="$(LOCAL_FRONTEND_IMAGE)"; REMOTE="$(FRONTEND_IMAGE)"; \
-			docker-compose build $(FRONTEND_SERVICE) ;; \
+			$(COMPOSE) build $(FRONTEND_SERVICE) ;; \
 		pi-sync) \
 			LOCAL="$(LOCAL_PI_SYNC_IMAGE)"; REMOTE="$(PI_SYNC_IMAGE)"; \
 			docker build -t "$$LOCAL:latest" ./pi-sync ;; \

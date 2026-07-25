@@ -25,6 +25,12 @@ func main() {
 
 	// pprof for live diagnostics — curl http://<host>:6060/debug/pprof/goroutine?debug=2
 	// when the scraper hangs to see what every goroutine is blocked on.
+	// /healthz shares this listener: a liveness probe for Uptime Kuma and the
+	// deploy Verify step (the scraper has no other inbound HTTP surface).
+	http.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
 	go func() {
 		if err := http.ListenAndServe("0.0.0.0:6060", nil); err != nil {
 			slog.Warn("pprof server exited", "error", err)

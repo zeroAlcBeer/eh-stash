@@ -43,3 +43,10 @@ async def get_thumb(gid: int):
 @app.get("/")
 def root():
     return {"message": "EH-Stash API is running"}
+
+
+@app.get("/healthz")
+def healthz():
+    # Liveness probe for Uptime Kuma and the deploy Verify step. Kept cheap
+    # (no DB round-trip) so a slow/blocked pool can't mask a live process.
+    return {"status": "ok"}

@@ -52,6 +52,7 @@ HEARTBEAT_SEC   = max(1, int(os.environ.get("SYNC_HEARTBEAT_SEC", "60")))
 CHUNK_ROT       = int(os.environ.get("SYNC_CHUNK_ROT", "5000"))
 OUTBOX_BATCH    = int(os.environ.get("SYNC_OUTBOX_BATCH", "500"))
 ONESHOT         = os.environ.get("SYNC_ONESHOT") == "1"
+HEALTH_PORT     = int(os.environ.get("SYNC_HEALTH_PORT", "8097"))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -696,12 +697,39 @@ def run_cycle(pi_conn, neon_conn):
 
 # ─── Main loop ──────────────────────────────────────────────────────────────
 
+def start_health_server():
+    """Liveness endpoint on a daemon thread for Uptime Kuma and the deploy
+    Verify step. pi-sync exposes no inbound API otherwise; this only signals
+    that the process is up (the loop's real health is tracked in the DB via
+    the runtime heartbeat)."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path == "/healthz":
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"status": "ok"}')
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def log_message(self, *_args):
+            pass  # silence per-request stderr logging
+
+    server = ThreadingHTTPServer(("0.0.0.0", HEALTH_PORT), _Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    log.info("health server listening on :%d", HEALTH_PORT)
+
+
 def main():
     log.info(
         "pi-sync starting: cadence=%ds heartbeat=%ds rot=%d "
         "outbox_batch=%d thumbs=%s",
         CADENCE_SEC, HEARTBEAT_SEC, CHUNK_ROT, OUTBOX_BATCH, THUMB_DIR,
     )
+    start_health_server()
     heartbeat = RuntimeHeartbeat()
     startup_conn = None
     try:

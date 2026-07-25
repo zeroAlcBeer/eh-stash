@@ -84,6 +84,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    ports:
+      - "8097:8097"   # /healthz — liveness probe for Uptime Kuma + deploy verify
     environment:
       PI_DSN: ${DATABASE_URL}
       NEON_DSN: ${NEON_DSN}

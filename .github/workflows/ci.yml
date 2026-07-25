@@ -1,0 +1,64 @@
+# PR + master-push checks. GitHub-hosted runners only — free for a public
+# repo, and fork PRs never see secrets (none are used here anyway).
+#
+# The two Python services connect to their database at import time
+# (api/db.py builds a pool; pi-sync reads required env at module load), so
+# CI installs deps and byte-compiles rather than importing — a syntax/deps
+# gate that never needs a live DB.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+jobs:
+  scraper:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: scraper-go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: scraper-go/go.mod
+      - run: go vet ./...
+      - run: go build ./...
+      - run: go test ./...
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: api — install deps + byte-compile
+        working-directory: api
+        run: |
+          uv venv
+          uv pip install --python .venv -r requirements.txt
+          .venv/bin/python -m compileall -q .
+      - name: pi-sync — install deps + byte-compile
+        working-directory: pi-sync
+        run: |
+          uv venv
+          uv pip install --python .venv -r requirements.txt
+          .venv/bin/python -m compileall -q .
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      # `lint` is NOT gated: the repo ships no ESLint config, so `pnpm run
+      # lint` currently errors out. Add it here once a config lands.
+      - run: pnpm run build

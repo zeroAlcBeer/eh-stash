@@ -1,0 +1,132 @@
+# Builds changed components natively on the Pi (arm64), publishes immutable
+# git-SHA tags to the LAN registry via `make release-<component>`, pins them
+# in the stack's .env, syncs the deployment compose, and rolls the Dockge
+# stack. Only changed components are rebuilt / pulled.
+#
+# Runner note: self-hosted runners are registered per account. Register a
+# runner on the Pi under this repo (or the zeroAlcBeer account) with labels
+# [self-hosted, pi]. It needs Docker + LAN access to the registry
+# (192.168.0.110:5000) and sudo on /opt/stacks/ehstash.
+#
+# SECURITY NOTE (public repo): this workflow must never gain a pull_request
+# trigger — it executes on the Pi, and only the repo owner can push master.
+name: Deploy
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "api/**"
+      - "scraper-go/**"
+      - "migrations/**"
+      - "frontend/**"
+      - "pi-sync/**"
+      - "Makefile"
+      - "docker-compose.yaml"
+      - "docker-compose.pi.yaml"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+    inputs:
+      components:
+        description: "Comma-separated components to force-release (api,scraper,frontend,pi-sync)"
+        required: false
+        default: ""
+
+concurrency:
+  group: deploy-eh-stash
+  cancel-in-progress: false
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      api: ${{ steps.filter.outputs.api == 'true' || contains(github.event.inputs.components, 'api') }}
+      scraper: ${{ steps.filter.outputs.scraper == 'true' || contains(github.event.inputs.components, 'scraper') }}
+      frontend: ${{ steps.filter.outputs.frontend == 'true' || contains(github.event.inputs.components, 'frontend') }}
+      pi_sync: ${{ steps.filter.outputs.pi_sync == 'true' || contains(github.event.inputs.components, 'pi-sync') }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        if: github.event_name == 'push'
+        with:
+          filters: |
+            api:
+              - "api/**"
+            scraper:
+              - "scraper-go/**"
+              - "migrations/**"
+            frontend:
+              - "frontend/**"
+            pi_sync:
+              - "pi-sync/**"
+
+  deploy:
+    needs: changes
+    runs-on: [self-hosted, pi]
+    env:
+      STACK_DIR: /opt/stacks/ehstash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Release changed components (native arm64 build)
+        run: |
+          set -eu
+          if [ "${{ needs.changes.outputs.api }}" = "true" ]; then make release-api; fi
+          if [ "${{ needs.changes.outputs.scraper }}" = "true" ]; then make release-scraper; fi
+          if [ "${{ needs.changes.outputs.frontend }}" = "true" ]; then make release-frontend; fi
+          if [ "${{ needs.changes.outputs.pi_sync }}" = "true" ]; then make release-pi-sync; fi
+
+      - name: Pin released tags in the stack .env
+        run: |
+          set -eu
+          SHA=$(git rev-parse --short=12 HEAD)
+          if [ "${{ needs.changes.outputs.api }}" = "true" ]; then
+            sudo sed -i "s/^API_TAG=.*/API_TAG=$SHA/" "$STACK_DIR/.env"
+          fi
+          if [ "${{ needs.changes.outputs.scraper }}" = "true" ]; then
+            sudo sed -i "s/^SCRAPER_TAG=.*/SCRAPER_TAG=$SHA/" "$STACK_DIR/.env"
+          fi
+          if [ "${{ needs.changes.outputs.frontend }}" = "true" ]; then
+            sudo sed -i "s/^FRONTEND_TAG=.*/FRONTEND_TAG=$SHA/" "$STACK_DIR/.env"
+          fi
+          if [ "${{ needs.changes.outputs.pi_sync }}" = "true" ]; then
+            sudo sed -i "s/^PI_SYNC_TAG=.*/PI_SYNC_TAG=$SHA/" "$STACK_DIR/.env"
+          fi
+
+      - name: Sync deployment compose to the stack
+        run: |
+          sudo cp docker-compose.pi.yaml "$STACK_DIR/compose.yaml"
+          cd "$STACK_DIR" && sudo docker compose config --quiet
+
+      - name: Roll changed services
+        run: |
+          set -eu
+          # Scoped pull: never touch the floating postgres/pgvector tag here,
+          # so an upstream rebuild can't restart the DB on an unrelated deploy.
+          SERVICES=""
+          [ "${{ needs.changes.outputs.api }}" = "true" ]      && SERVICES="$SERVICES api"
+          [ "${{ needs.changes.outputs.scraper }}" = "true" ]  && SERVICES="$SERVICES scraper"
+          [ "${{ needs.changes.outputs.frontend }}" = "true" ] && SERVICES="$SERVICES frontend"
+          [ "${{ needs.changes.outputs.pi_sync }}" = "true" ]  && SERVICES="$SERVICES pi-sync"
+          cd "$STACK_DIR"
+          if [ -n "$SERVICES" ]; then
+            sudo docker compose pull $SERVICES
+          fi
+          sudo docker compose up -d
+
+      - name: Verify health
+        run: |
+          for i in $(seq 1 18); do
+            api=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3000/healthz || true)
+            fe=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:4173/ || true)
+            sc=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:6060/healthz || true)
+            ps=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8097/healthz || true)
+            if [ "$api" = "200" ] && [ "$fe" = "200" ] && [ "$sc" = "200" ] && [ "$ps" = "200" ]; then
+              echo "healthy after $((i*5))s"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "stack never became healthy (api=$api frontend=$fe scraper=$sc pi-sync=$ps)"
+          exit 1
