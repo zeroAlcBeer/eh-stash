@@ -18,6 +18,10 @@ export function getTasks() {
   return request('/tasks');
 }
 
+export function getTaskEvents(id, limit = 30) {
+  return request(`/tasks/${id}/events?limit=${limit}`);
+}
+
 export function createTask(data) {
   return request('/tasks', {
     method: 'POST',

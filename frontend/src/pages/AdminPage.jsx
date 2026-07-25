@@ -22,6 +22,7 @@ import {
   createTask,
   deleteTask,
   getTasks,
+  getTaskEvents,
   getThumbStats,
   getSimilarityDistribution,
   getEmbeddingsStatus,
@@ -184,14 +185,6 @@ function getTaskMode(task) {
   return 'full';
 }
 
-function getPrimaryState(task) {
-  if (task.requested_action) return `request: ${task.requested_action}`;
-  if (task.current_job_state) return task.current_job_state;
-  if (task.enabled && task.schedule_kind === 'periodic') return 'waiting';
-  if (task.latest_job_state) return task.latest_job_state;
-  return task.enabled ? 'enabled' : 'disabled';
-}
-
 function getProgressSummary(task) {
   const checkpoint = getCheckpoint(task);
   if (getTaskMode(task) === 'incremental') {
@@ -243,28 +236,38 @@ function getTaskSubtitle(task) {
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
 const STATUS_CONFIG = {
+  // server-derived task phases
+  queued: { text: 'text-cyan-300', ring: 'ring-cyan-500/30', bg: 'bg-cyan-500/10' },
+  running: { text: 'text-blue-400', ring: 'ring-blue-500/30', bg: 'bg-blue-500/10' },
+  retrying: { text: 'text-amber-300', ring: 'ring-amber-500/30', bg: 'bg-amber-500/10' },
+  paused: { text: 'text-amber-300', ring: 'ring-amber-500/30', bg: 'bg-amber-500/10' },
+  failed: { text: 'text-rose-400', ring: 'ring-rose-500/30', bg: 'bg-rose-500/10' },
+  idle: { text: 'text-slate-300', ring: 'ring-slate-500/30', bg: 'bg-slate-500/10' },
+  disabled: { text: 'text-gray-400', ring: 'ring-gray-500/30', bg: 'bg-gray-500/10' },
+  // raw river job states (debug section)
   available: { text: 'text-cyan-300', ring: 'ring-cyan-500/30', bg: 'bg-cyan-500/10' },
   scheduled: { text: 'text-cyan-400', ring: 'ring-cyan-500/30', bg: 'bg-cyan-500/10' },
-  running: { text: 'text-blue-400', ring: 'ring-blue-500/30', bg: 'bg-blue-500/10' },
   retryable: { text: 'text-amber-300', ring: 'ring-amber-500/30', bg: 'bg-amber-500/10' },
   completed: { text: 'text-emerald-400', ring: 'ring-emerald-500/30', bg: 'bg-emerald-500/10' },
   cancelled: { text: 'text-gray-400', ring: 'ring-gray-500/30', bg: 'bg-gray-500/10' },
   discarded: { text: 'text-rose-400', ring: 'ring-rose-500/30', bg: 'bg-rose-500/10' },
-  enabled: { text: 'text-sky-300', ring: 'ring-sky-500/30', bg: 'bg-sky-500/10' },
-  waiting: { text: 'text-slate-300', ring: 'ring-slate-500/30', bg: 'bg-slate-500/10' },
-  disabled: { text: 'text-gray-400', ring: 'ring-gray-500/30', bg: 'bg-gray-500/10' },
 };
 
-function StatusBadge({ status }) {
+const SPINNING_STATES = ['available', 'scheduled', 'running', 'retryable', 'retrying', 'queued'];
+
+function StatusBadge({ status, title }) {
   const cfg = STATUS_CONFIG[status] || STATUS_CONFIG.disabled;
-  const spinning = status === 'available' || status === 'scheduled' || status === 'running' || status === 'retryable';
+  const spinning = SPINNING_STATES.includes(status);
 
   return (
-    <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium ring-1 ${cfg.bg} ${cfg.text} ${cfg.ring}`}>
+    <span
+      title={title}
+      className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium ring-1 ${cfg.bg} ${cfg.text} ${cfg.ring}`}
+    >
       {spinning ? (
         <Loader2 size={11} className="animate-spin" />
       ) : (
-        <span className={`w-1.5 h-1.5 rounded-full ${status === 'discarded' ? 'bg-rose-400' : status === 'completed' ? 'bg-emerald-400' : status === 'enabled' ? 'bg-sky-400' : 'bg-gray-400'}`} aria-hidden="true" />
+        <span className={`w-1.5 h-1.5 rounded-full ${['discarded', 'failed'].includes(status) ? 'bg-rose-400' : status === 'completed' ? 'bg-emerald-400' : status === 'paused' ? 'bg-amber-300' : 'bg-gray-400'}`} aria-hidden="true" />
       )}
       {status}
     </span>
@@ -348,7 +351,7 @@ function RiverStateRail({ state }) {
 }
 
 function TaskHeaderStrip({ tasks }) {
-  const activeJobs = tasks.filter(activeCurrentJob).length;
+  const activeJobs = tasks.filter((task) => ['running', 'queued', 'retrying'].includes(task.phase)).length;
   const enabled = tasks.filter((task) => task.enabled).length;
   const requested = tasks.filter((task) => task.requested_action).length;
   return (
@@ -375,6 +378,7 @@ function DefinitionPanel({ task }) {
           </span>
         </div>
         <p className="mt-1 text-xs text-gray-500">{formatTaskScope(task)}</p>
+        <p className="mt-1 text-xs text-gray-400" title={task.phase_reason}>{task.phase_reason}</p>
       </div>
       <div className="grid gap-1.5">
         <MetaLine label="kind" value={formatTaskKind(task.task_kind)} />
@@ -528,6 +532,80 @@ function CheckpointPanel({ task }) {
   return <GenericCheckpoint task={task} checkpoint={checkpoint} />;
 }
 
+const EVENT_TYPE_STYLES = {
+  'round.started': 'text-emerald-300',
+  'round.finished': 'text-emerald-400',
+  'round.paused': 'text-amber-300',
+  'slice.done': 'text-cyan-300',
+  'batch.done': 'text-cyan-300',
+  'job.queued': 'text-sky-300',
+  'job.cancel_requested': 'text-amber-300',
+  'job.retry_requested': 'text-amber-300',
+};
+
+function summarizeEventPayload(event) {
+  const p = event.payload || {};
+  switch (event.type) {
+    case 'slice.done': {
+      const dur = p.duration_ms != null ? `${(p.duration_ms / 1000).toFixed(1)}s` : '';
+      const exit = p.exit_reason ? ` → ${p.exit_reason}` : '';
+      return `items ${p.items ?? 0} · new ${p.new ?? 0} · refresh ${p.refresh ?? 0} · ${dur}${exit}`;
+    }
+    case 'round.paused':
+      return `reason ${p.reason || '—'}`;
+    case 'round.started':
+      return p.run_id ? `run ${p.run_id}` : '';
+    case 'round.finished':
+      return p.reason || '';
+    case 'batch.done':
+      return `done ${formatNumber(p.total_done)} · pending ${formatNumber(p.total_pending)}`;
+    default: {
+      const s = JSON.stringify(p);
+      return s === '{}' ? '' : s.slice(0, 80);
+    }
+  }
+}
+
+function TaskTimeline({ task, expanded }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['admin', 'taskEvents', task.id],
+    queryFn: () => getTaskEvents(task.id, 30),
+    enabled: expanded,
+    refetchInterval: false,
+  });
+  // task.updated is bookkeeping noise — every meaningful transition already
+  // has a dedicated event type.
+  const events = (data || []).filter((event) => event.type !== 'task.updated');
+
+  return (
+    <div className="space-y-2 min-w-0">
+      <div className="flex items-center gap-2">
+        <Clock3 size={14} className="text-gray-400" />
+        <span className="text-xs uppercase tracking-wider text-gray-500">Timeline</span>
+      </div>
+      {isLoading ? (
+        <div className="flex items-center gap-2 text-xs text-gray-500">
+          <Loader2 size={12} className="animate-spin" /> loading events…
+        </div>
+      ) : events.length === 0 ? (
+        <p className="text-xs text-gray-500">no events yet</p>
+      ) : (
+        <div className="max-h-56 space-y-1 overflow-y-auto pr-1">
+          {events.map((event) => (
+            <div key={event.id} className="grid grid-cols-[52px_minmax(72px,auto)_1fr] items-baseline gap-2 text-xs font-mono">
+              <span className="text-gray-500">{formatTimestamp(event.created_at).slice(-8)}</span>
+              <span className={EVENT_TYPE_STYLES[event.type] || 'text-gray-400'}>{event.type}</span>
+              <span className="truncate text-gray-400" title={summarizeEventPayload(event)}>
+                {summarizeEventPayload(event)}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SyncTaskRunRow({ task, rowAction, runTaskAction, setDeleteTarget, expanded, onToggle }) {
   const transition = isTransitioning(task);
   const rowBusy = Boolean(rowAction);
@@ -537,7 +615,6 @@ function SyncTaskRunRow({ task, rowAction, runTaskAction, setDeleteTarget, expan
   const canRetry = !rowBusy && !transition && !currentJobActive && RETRYABLE_TERMINAL_STATES.includes(task.latest_job_state);
   const canDelete = !rowBusy && !transition && !task.enabled && !currentJobActive;
   const isIncremental = getTaskMode(task) === 'incremental';
-  const primaryState = getPrimaryState(task);
   const progress = getProgressPercent(task);
   const attention = task.error_message || task.current_job_state === 'retryable' || task.latest_job_state === 'discarded' || transition;
 
@@ -560,7 +637,7 @@ function SyncTaskRunRow({ task, rowAction, runTaskAction, setDeleteTarget, expan
         </div>
 
         <div className="flex items-center gap-2 min-w-0">
-          <StatusBadge status={primaryState.startsWith('request:') ? 'retryable' : primaryState} />
+          <StatusBadge status={task.phase} title={task.phase_reason} />
           <span className="truncate text-xs font-mono text-gray-500">
             {task.current_job_kind ? formatJobKind(task.current_job_kind) : task.enabled && task.schedule_kind === 'periodic' ? 'next kick' : formatJobKind(task.latest_job_kind)}
           </span>
@@ -638,10 +715,20 @@ function SyncTaskRunRow({ task, rowAction, runTaskAction, setDeleteTarget, expan
         </div>
       )}
       {expanded && (
-        <div className="grid gap-5 border-t border-white/10 px-4 py-4 lg:grid-cols-3">
-          <DefinitionPanel task={task} />
-          <RiverJobPanel task={task} />
-          <CheckpointPanel task={task} />
+        <div className="space-y-4 border-t border-white/10 px-4 py-4">
+          <div className="grid gap-5 lg:grid-cols-3">
+            <DefinitionPanel task={task} />
+            <CheckpointPanel task={task} />
+            <TaskTimeline task={task} expanded={expanded} />
+          </div>
+          <details className="rounded-md border border-white/10 bg-black/20">
+            <summary className="cursor-pointer select-none px-3 py-2 text-xs uppercase tracking-wider text-gray-500 hover:text-gray-300">
+              River job debug
+            </summary>
+            <div className="border-t border-white/10 px-3 py-3">
+              <RiverJobPanel task={task} />
+            </div>
+          </details>
         </div>
       )}
     </div>
@@ -1402,6 +1489,7 @@ export default function AdminPage() {
       taskRefreshTimer = window.setTimeout(() => {
         taskRefreshTimer = null;
         queryClient.invalidateQueries({ queryKey: ['admin', 'tasks'] });
+        queryClient.invalidateQueries({ queryKey: ['admin', 'taskEvents'] });
       }, 250);
     };
 
