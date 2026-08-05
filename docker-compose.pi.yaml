@@ -99,5 +99,5 @@ services:
       SYNC_CHUNK_ROT: ${SYNC_CHUNK_ROT:-5000}
       SYNC_OUTBOX_BATCH: ${SYNC_OUTBOX_BATCH:-500}
     volumes:
-      - /opt/eh-stash/thumbs:/data/thumbs:ro
+      - /opt/eh-stash/thumbs:/data/thumbs
     restart: unless-stopped

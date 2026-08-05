@@ -9,6 +9,11 @@ COPY package.json ./
 RUN pnpm install
 
 COPY . .
+# VITE_THUMB_BASE_URL: bake the R2 thumb CDN origin into the self-hosted build
+# so the frontend fetches thumbs directly from R2 (same as ehstash.com).
+# Empty (dev build) ⇒ falls back to same-origin /v1/thumbs/{gid}.
+ARG VITE_THUMB_BASE_URL=""
+ENV VITE_THUMB_BASE_URL=${VITE_THUMB_BASE_URL}
 RUN pnpm build
 
 # ── Stage 2: preview (serve dist/ via vite preview) ──────────────

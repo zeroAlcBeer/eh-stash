@@ -44,7 +44,10 @@ services:
       - thumbs_data:/data/thumbs
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        VITE_THUMB_BASE_URL: ${VITE_THUMB_BASE_URL:-}
     depends_on:
       - api
     ports:

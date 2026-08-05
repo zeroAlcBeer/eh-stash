@@ -152,6 +152,19 @@ def r2_put_thumb(gid: int) -> str:
         return "error"
 
 
+def delete_local_thumb(gid: int):
+    """Remove the local thumb after R2 + Neon both succeeded — R2 is now the
+    source of truth (matches ehstash.com). Non-fatal: a failed delete just
+    leaves a stale file that'll be reaped on the next pass."""
+    path = THUMB_DIR / str(gid)
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        log.warning("gid=%d local thumb delete failed: %s", gid, e)
+
+
 # ─── Pi helpers ─────────────────────────────────────────────────────────────
 
 def pi_load_state(pi_conn):
@@ -542,6 +555,8 @@ def drain_outbox(pi_conn, neon_conn):
             except Exception:
                 pass
             continue
+        # R2 PUT + Neon UPSERT both succeeded — local thumb is now redundant.
+        delete_local_thumb(gid)
         if pi_outbox_delete_if_unchanged(pi_conn, gid, enq):
             pushed += 1
         else:
@@ -612,6 +627,9 @@ def backfill_chunk(pi_conn, neon_conn, prev_cursor):
         except Exception as e:
             log.warning("backfill new gid=%d UPSERT failed: %s", gid, e)
             neon_conn.rollback()
+            continue
+        # R2 PUT + Neon UPSERT both succeeded — local thumb is now redundant.
+        delete_local_thumb(gid)
 
     if changed_gids:
         changed_full = pi_fetch_full(pi_conn, changed_gids)

@@ -3,10 +3,16 @@
 # in the stack's .env, syncs the deployment compose, and rolls the Dockge
 # stack. Only changed components are rebuilt / pulled.
 #
-# Runner note: self-hosted runners are registered per account. Register a
-# runner on the Pi under this repo (or the zeroAlcBeer account) with labels
+# This workflow runs on a self-hosted runner registered on the Pi with labels
 # [self-hosted, pi]. It needs Docker + LAN access to the registry
 # (192.168.0.110:5000) and sudo on /opt/stacks/ehstash.
+#
+# If the Pi runner is unavailable, run the equivalent steps manually on the Pi:
+#   git clone <repo> && cd eh-stash && git checkout <sha>
+#   VITE_THUMB_BASE_URL=<url> make release-frontend
+#   make release-pi-sync
+#   # edit /opt/stacks/ehstash/.env → FRONTEND_TAG=<sha>, PI_SYNC_TAG=<sha>
+#   cd /opt/stacks/ehstash && sudo docker compose pull && sudo docker compose up -d
 #
 # SECURITY NOTE (public repo): this workflow must never gain a pull_request
 # trigger — it executes on the Pi, and only the repo owner can push master.
@@ -72,6 +78,12 @@ jobs:
       - name: Release changed components (native arm64 build)
         run: |
           set -eu
+          # Frontend build bakes VITE_THUMB_BASE_URL (R2 thumb CDN) into the
+          # bundle at build time. Source it from the stack .env so the repo
+          # stays deployment-agnostic. Empty/missing ⇒ local /v1/thumbs fallback.
+          if [ "${{ needs.changes.outputs.frontend }}" = "true" ]; then
+            export VITE_THUMB_BASE_URL="$(sudo grep ^VITE_THUMB_BASE_URL "$STACK_DIR/.env" 2>/dev/null | cut -d= -f2- || true)"
+          fi
           if [ "${{ needs.changes.outputs.api }}" = "true" ]; then make release-api; fi
           if [ "${{ needs.changes.outputs.scraper }}" = "true" ]; then make release-scraper; fi
           if [ "${{ needs.changes.outputs.frontend }}" = "true" ]; then make release-frontend; fi
