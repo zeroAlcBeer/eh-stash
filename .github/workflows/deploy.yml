@@ -7,11 +7,15 @@
 # [self-hosted, pi]. It needs Docker + LAN access to the registry
 # (192.168.0.110:5000) and sudo on /opt/stacks/ehstash.
 #
-# If the Pi runner is unavailable, run the equivalent steps manually on the Pi:
-#   git clone <repo> && cd eh-stash && git checkout <sha>
+# Currently disabled (push trigger removed) — the Pi self-hosted runner was
+# lost during a disk migration. Re-enable by restoring the `on: push:` block
+# below once a runner is re-registered. Until then, deploy manually:
+#   # on a Mac with arm64 + Docker:
 #   VITE_THUMB_BASE_URL=<url> make release-frontend
 #   make release-pi-sync
+#   # then on the Pi:
 #   # edit /opt/stacks/ehstash/.env → FRONTEND_TAG=<sha>, PI_SYNC_TAG=<sha>
+#   sudo cp docker-compose.pi.yaml /opt/stacks/ehstash/compose.yaml
 #   cd /opt/stacks/ehstash && sudo docker compose pull && sudo docker compose up -d
 #
 # SECURITY NOTE (public repo): this workflow must never gain a pull_request
@@ -19,18 +23,6 @@
 name: Deploy
 
 on:
-  push:
-    branches: [master]
-    paths:
-      - "api/**"
-      - "scraper-go/**"
-      - "migrations/**"
-      - "frontend/**"
-      - "pi-sync/**"
-      - "Makefile"
-      - "docker-compose.yaml"
-      - "docker-compose.pi.yaml"
-      - ".github/workflows/deploy.yml"
   workflow_dispatch:
     inputs:
       components:
