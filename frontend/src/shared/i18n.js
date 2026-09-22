@@ -83,6 +83,7 @@ const T = {
 
   // Card / group
   'card.openEx': { 'zh-CN': '在 ExHentai 打开', 'zh-TW': '在 ExHentai 開啟', en: 'Open in ExHentai' },
+  'card.details': { 'zh-CN': '查看详情', 'zh-TW': '查看詳情', en: 'View details' },
   'card.viewVersions': { 'zh-CN': '查看 {count} 个版本', 'zh-TW': '查看 {count} 個版本', en: 'View {count} versions' },
   'card.versionsLabel': { 'zh-CN': '{count} 版本', 'zh-TW': '{count} 版本', en: '{count} ver.' },
   'group.versions': { 'zh-CN': '{count} 个版本', 'zh-TW': '{count} 個版本', en: '{count} versions' },

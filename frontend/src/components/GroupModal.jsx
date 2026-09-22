@@ -1,8 +1,8 @@
 import React, { useEffect, useReducer, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { X, Star, Heart, FileText, Globe, Calendar, ChevronRight } from 'lucide-react';
+import { X, Star, Heart, FileText, Globe, Calendar, ChevronRight, HardDrive, Download } from 'lucide-react';
 import { fetchGalleryGroup } from '../api';
-import { CATEGORY_STYLES, FALLBACK_IMAGE, getThumbUrl } from '../shared/gallery';
+import { CATEGORY_STYLES, FALLBACK_IMAGE, getThumbUrl, getExUrl, LINK_TARGET } from '../shared/gallery';
 import { t, formatDate } from '../shared/i18n';
 import { IS_PUBLIC } from '../shared/mode';
 
@@ -74,10 +74,17 @@ export default function GroupModal({ groupId, onClose }) {
           const date = formatDate(g.posted_at);
           const displayTitle = g.title_jpn || g.title;
 
+          // Consistent with the cards: self-hosted clicks go straight to
+          // ExHentai; public mode stays on-site via the detail page.
+          const RowWrapper = IS_PUBLIC ? Link : 'a';
+          const rowProps = IS_PUBLIC
+            ? { to: `/gallery/${g.gid}` }
+            : { href: getExUrl(g.gid, g.token), target: LINK_TARGET, rel: 'noopener noreferrer' };
+
           return (
-            <Link
+            <RowWrapper
               key={g.gid}
-              to={`/gallery/${g.gid}`}
+              {...rowProps}
               className="pressable flex gap-3 rounded-lg bg-zinc-800 ring-1 ring-white/5 hover:ring-amber-400/60 transition-shadow p-2.5"
             >
               {/* Thumbnail */}
@@ -115,6 +122,16 @@ export default function GroupModal({ groupId, onClose }) {
                       <Globe size={10} />{g.language}
                     </span>
                   )}
+                  {g.file_size && (
+                    <span className="flex items-center gap-0.5">
+                      <HardDrive size={10} />{g.file_size}
+                    </span>
+                  )}
+                  {g.torrent_count > 0 && (
+                    <span className="flex items-center gap-0.5">
+                      <Download size={10} />{g.torrent_count}
+                    </span>
+                  )}
                   {date && (
                     <span className="flex items-center gap-0.5">
                       <Calendar size={10} />{date}
@@ -123,7 +140,7 @@ export default function GroupModal({ groupId, onClose }) {
                   <ChevronRight size={12} className="ml-auto text-gray-600" />
                 </div>
               </div>
-            </Link>
+            </RowWrapper>
           );
         })}
       </div>
