@@ -88,7 +88,6 @@ services:
       - "8097:8097"   # /healthz — liveness probe for Uptime Kuma + deploy verify
     environment:
       PI_DSN: ${DATABASE_URL}
-      NEON_DSN: ${NEON_DSN}
       R2_ENDPOINT: ${R2_ENDPOINT}
       R2_BUCKET: ${R2_BUCKET}
       R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID}

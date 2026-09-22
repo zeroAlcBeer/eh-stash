@@ -684,7 +684,7 @@ def thumb_queue_stats(db=Depends(get_db)):
     )
 
 
-# ── Pi -> Neon + R2 cloud sync status ───────────────────────────────────────
+# ── Pi -> R2 thumbnail sync status ─────────────────────────────────────────
 
 HEARTBEAT_STALE_AFTER_SEC = 180
 

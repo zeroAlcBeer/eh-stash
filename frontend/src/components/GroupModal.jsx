@@ -1,10 +1,8 @@
 import React, { useEffect, useReducer, useRef } from 'react';
-import { Link } from 'react-router-dom';
 import { X, Star, Heart, FileText, Globe, Calendar, ChevronRight, HardDrive, Download } from 'lucide-react';
 import { fetchGalleryGroup } from '../api';
 import { CATEGORY_STYLES, FALLBACK_IMAGE, getThumbUrl, getExUrl, LINK_TARGET } from '../shared/gallery';
 import { t, formatDate } from '../shared/i18n';
-import { IS_PUBLIC } from '../shared/mode';
 
 const initialState = { galleries: [], loading: true };
 
@@ -74,17 +72,13 @@ export default function GroupModal({ groupId, onClose }) {
           const date = formatDate(g.posted_at);
           const displayTitle = g.title_jpn || g.title;
 
-          // Consistent with the cards: self-hosted clicks go straight to
-          // ExHentai; public mode stays on-site via the detail page.
-          const RowWrapper = IS_PUBLIC ? Link : 'a';
-          const rowProps = IS_PUBLIC
-            ? { to: `/gallery/${g.gid}` }
-            : { href: getExUrl(g.gid, g.token), target: LINK_TARGET, rel: 'noopener noreferrer' };
-
+          // Consistent with the cards: clicks go straight to ExHentai.
           return (
-            <RowWrapper
+            <a
               key={g.gid}
-              {...rowProps}
+              href={getExUrl(g.gid, g.token)}
+              target={LINK_TARGET}
+              rel="noopener noreferrer"
               className="pressable flex gap-3 rounded-lg bg-zinc-800 ring-1 ring-white/5 hover:ring-amber-400/60 transition-shadow p-2.5"
             >
               {/* Thumbnail */}
@@ -99,7 +93,7 @@ export default function GroupModal({ groupId, onClose }) {
               {/* Info */}
               <div className="flex-1 min-w-0 flex flex-col gap-1">
                 <p className={`text-sm text-gray-200 line-clamp-2 leading-snug font-medium ${g.is_expunged ? 'line-through text-gray-500' : ''}`}>
-                  {!IS_PUBLIC && g.is_favorited && <Heart size={12} className="inline fill-rose-400 text-rose-400 mr-1 -mt-0.5" />}
+                  {g.is_favorited && <Heart size={12} className="inline fill-rose-400 text-rose-400 mr-1 -mt-0.5" />}
                   {displayTitle}
                 </p>
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500">
@@ -140,7 +134,7 @@ export default function GroupModal({ groupId, onClose }) {
                   <ChevronRight size={12} className="ml-auto text-gray-600" />
                 </div>
               </div>
-            </RowWrapper>
+            </a>
           );
         })}
       </div>

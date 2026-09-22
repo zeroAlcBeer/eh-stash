@@ -25,7 +25,6 @@ import GroupModal from '../components/GroupModal';
 import TagBadge from '../components/TagBadge';
 import { CATEGORY_STYLES, FALLBACK_IMAGE, getExUrl, getThumbUrl, LINK_TARGET } from '../shared/gallery';
 import { t, formatDate, formatDateTime } from '../shared/i18n';
-import { IS_PUBLIC } from '../shared/mode';
 
 const NS_ORDER = ['artist', 'group', 'parody', 'character', 'female', 'male', 'language', 'misc'];
 
@@ -98,7 +97,7 @@ export default function GalleryDetailPage() {
   const commentsQuery = useQuery({
     queryKey: ['gallery-comments', gid],
     queryFn: () => fetchGalleryComments(gid),
-    enabled: !IS_PUBLIC && Number.isFinite(gid),
+    enabled: Number.isFinite(gid),
   });
 
   const gallery = galleryQuery.data;
@@ -175,7 +174,7 @@ export default function GalleryDetailPage() {
         </div>
       )}
 
-      {!IS_PUBLIC && !gallery.file_size && (
+      {!gallery.file_size && (
         <div role="status" className="mb-4 flex items-center gap-2 rounded-xl border border-sky-500/20 bg-sky-500/[0.07] px-4 py-3 text-sm text-sky-200">
           <Clock3 size={16} />{t('detail.pending')}
         </div>
@@ -247,8 +246,7 @@ export default function GalleryDetailPage() {
             </section>
           )}
 
-          {!IS_PUBLIC && (
-            <section>
+          <section>
               <div className="mb-3 flex items-end justify-between gap-3">
                 <div>
                   <h2 className="text-sm font-semibold text-white">{t('detail.comments')}</h2>
@@ -269,8 +267,7 @@ export default function GalleryDetailPage() {
               ) : (
                 <div className="rounded-xl border border-white/10 bg-white/[0.02] px-4 py-6 text-center text-sm text-gray-600">{t('detail.comments.empty')}</div>
               )}
-            </section>
-          )}
+          </section>
         </main>
       </div>
 

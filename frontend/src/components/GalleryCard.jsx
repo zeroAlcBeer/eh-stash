@@ -1,10 +1,9 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { Star, Heart, MessageCircle, ExternalLink, FileText, Globe, User, Calendar, Layers, HardDrive, Download, Info } from 'lucide-react';
+import { Star, Heart, MessageCircle, FileText, Globe, User, Calendar, Layers, HardDrive, Download, Info } from 'lucide-react';
 import TagBadge from './TagBadge';
 import { getExUrl, LINK_TARGET, CATEGORY_STYLES, FALLBACK_IMAGE, getThumbUrl } from '../shared/gallery';
 import { t, formatDate } from '../shared/i18n';
-import { IS_PUBLIC } from '../shared/mode';
 
 const NS_ORDER = ['artist', 'group', 'parody', 'character', 'female', 'male', 'language', 'misc'];
 
@@ -18,24 +17,22 @@ function GridCard({ gallery, onGroupClick }) {
   const hasGroup = gallery.group_count > 1;
   const date = formatDate(posted_at);
 
-  // Self-hosted: one click jumps straight to ExHentai (grouped → versions
-  // modal). Public mode: visitors have no ExHentai session, so keep them
-  // on-site via the detail page instead.
+  // One click jumps straight to ExHentai (grouped → versions modal); the
+  // corner button below carries the on-site detail page.
   const handleClick = (e) => {
     if (hasGroup) {
       e.preventDefault();
       onGroupClick?.(gallery.group_id);
     }
   };
-  const CardWrapper = IS_PUBLIC ? Link : 'a';
-  const wrapperProps = IS_PUBLIC
-    ? { to: `/gallery/${gid}` }
-    : { href: exUrl, target: LINK_TARGET, rel: 'noopener noreferrer', onClick: handleClick };
 
   return (
-    <article className={`group relative flex flex-col rounded-lg overflow-hidden bg-zinc-900 transition-[box-shadow,opacity] duration-150 ${gallery.is_expunged ? 'opacity-40 hover:opacity-70 ' : ''}${!IS_PUBLIC && gallery.is_favorited ? 'ring-2 ring-rose-500/70 hover:ring-rose-400' : 'ring-1 ring-white/5 hover:ring-amber-400/60'}`}>
-      <CardWrapper
-        {...wrapperProps}
+    <article className={`group relative flex flex-col rounded-lg overflow-hidden bg-zinc-900 transition-[box-shadow,opacity] duration-150 ${gallery.is_expunged ? 'opacity-40 hover:opacity-70 ' : ''}${gallery.is_favorited ? 'ring-2 ring-rose-500/70 hover:ring-rose-400' : 'ring-1 ring-white/5 hover:ring-amber-400/60'}`}>
+      <a
+        href={exUrl}
+        target={LINK_TARGET}
+        rel="noopener noreferrer"
+        onClick={handleClick}
         className="pressable flex flex-col flex-1"
         title={displayTitle}
       >
@@ -64,8 +61,8 @@ function GridCard({ gallery, onGroupClick }) {
             </span>
           )}
         </div>
-        {/* Favorites badge — corner ribbon (self-hosted only) */}
-        {!IS_PUBLIC && gallery.is_favorited && (
+        {/* Favorites badge — corner ribbon */}
+        {gallery.is_favorited && (
           <>
             <div className="absolute top-0 left-0 w-0 h-0 border-t-[36px] border-r-[36px] border-t-rose-500/80 border-r-transparent" />
             <Heart size={12} className="absolute top-1 left-1 fill-white text-white drop-shadow" aria-hidden="true" />
@@ -92,7 +89,7 @@ function GridCard({ gallery, onGroupClick }) {
           )}
         </div>
       </div>
-      </CardWrapper>
+      </a>
       {hasGroup && (
         <button
           type="button"
@@ -103,25 +100,13 @@ function GridCard({ gallery, onGroupClick }) {
           <Layers size={10} />{gallery.group_count}
         </button>
       )}
-      {IS_PUBLIC ? (
-        <a
-          href={exUrl}
-          target={LINK_TARGET}
-          rel="noopener noreferrer"
-          className="pressable pointer-events-none absolute right-1.5 top-10 z-10 rounded-md bg-black/55 p-1.5 text-white/70 opacity-0 backdrop-blur-sm transition-[opacity,color] duration-150 hover:text-white group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
-          aria-label={t('card.openEx')}
-        >
-          <ExternalLink size={13} />
-        </a>
-      ) : (
-        <Link
-          to={`/gallery/${gid}`}
-          className="pressable pointer-events-none absolute right-1.5 top-10 z-10 rounded-md bg-black/55 p-1.5 text-white/70 opacity-0 backdrop-blur-sm transition-[opacity,color] duration-150 hover:text-white group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
-          aria-label={t('card.details')}
-        >
-          <Info size={13} />
-        </Link>
-      )}
+      <Link
+        to={`/gallery/${gid}`}
+        className="pressable pointer-events-none absolute right-1.5 top-10 z-10 rounded-md bg-black/55 p-1.5 text-white/70 opacity-0 backdrop-blur-sm transition-[opacity,color] duration-150 hover:text-white group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
+        aria-label={t('card.details')}
+      >
+        <Info size={13} />
+      </Link>
     </article>
   );
 }
@@ -135,13 +120,9 @@ function ListRow({ gallery, onTagSearch, translate, onGroupClick }) {
   const exUrl = getExUrl(gid, token);
   const catStyle = CATEGORY_STYLES[category] || CATEGORY_STYLES['Misc'];
 
-  // Same split as GridCard: self-hosted goes straight to ExHentai, public
-  // stays on-site. The always-visible corner button carries the opposite
-  // target so both destinations stay one click away in either mode.
-  const RowLink = IS_PUBLIC ? Link : 'a';
-  const rowLinkProps = IS_PUBLIC
-    ? { to: `/gallery/${gid}` }
-    : { href: exUrl, target: LINK_TARGET, rel: 'noopener noreferrer' };
+  // Same as GridCard: clicks go straight to ExHentai; the corner button
+  // carries the on-site detail page.
+  const rowLinkProps = { href: exUrl, target: LINK_TARGET, rel: 'noopener noreferrer' };
 
   const date = formatDate(posted_at);
 
@@ -154,7 +135,7 @@ function ListRow({ gallery, onTagSearch, translate, onGroupClick }) {
   return (
     <div className={`flex gap-3 rounded-lg bg-zinc-900 ring-1 ring-white/5 hover:ring-white/10 transition-[box-shadow,opacity] p-2.5 ${gallery.is_expunged ? 'opacity-40 hover:opacity-70' : ''}`}>
       {/* Thumbnail */}
-      <RowLink {...rowLinkProps} className="pressable shrink-0">
+      <a {...rowLinkProps} className="pressable shrink-0">
         <img
           src={thumb ? getThumbUrl(gid) : FALLBACK_IMAGE}
           alt={title}
@@ -164,38 +145,26 @@ function ListRow({ gallery, onTagSearch, translate, onGroupClick }) {
           className="w-[90px] h-[126px] sm:w-[140px] sm:h-[196px] object-contain bg-zinc-950 rounded"
           loading="lazy"
         />
-      </RowLink>
+      </a>
 
       {/* Content */}
       <div className="flex-1 min-w-0 flex flex-col gap-1.5">
         {/* Title + open link */}
         <div className="flex items-start justify-between gap-2">
-          <RowLink
+          <a
             {...rowLinkProps}
             className="text-sm font-medium text-gray-200 hover:text-white line-clamp-2 leading-snug transition-colors"
           >
-            {!IS_PUBLIC && gallery.is_favorited && <Heart size={12} className="inline fill-rose-400 text-rose-400 mr-1 -mt-0.5" aria-hidden="true" />}
+            {gallery.is_favorited && <Heart size={12} className="inline fill-rose-400 text-rose-400 mr-1 -mt-0.5" aria-hidden="true" />}
             {displayTitle}
-          </RowLink>
-          {IS_PUBLIC ? (
-            <a
-              href={exUrl}
-              target={LINK_TARGET}
-              rel="noopener noreferrer"
-              className="shrink-0 p-1.5 -mr-1.5 text-gray-500 hover:text-white transition-colors rounded-lg hover:bg-white/10"
-              aria-label={t('card.openEx')}
-            >
-              <ExternalLink size={14} />
-            </a>
-          ) : (
-            <Link
-              to={`/gallery/${gid}`}
-              className="shrink-0 p-1.5 -mr-1.5 text-gray-500 hover:text-white transition-colors rounded-lg hover:bg-white/10"
-              aria-label={t('card.details')}
-            >
-              <Info size={14} />
-            </Link>
-          )}
+          </a>
+          <Link
+            to={`/gallery/${gid}`}
+            className="shrink-0 p-1.5 -mr-1.5 text-gray-500 hover:text-white transition-colors rounded-lg hover:bg-white/10"
+            aria-label={t('card.details')}
+          >
+            <Info size={14} />
+          </Link>
         </div>
 
         {/* Meta row */}

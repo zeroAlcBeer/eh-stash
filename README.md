@@ -1,36 +1,30 @@
 # eh-stash
 
-A self-hosted ExHentai metadata index and a public read-only mirror
-([ehstash.com](https://ehstash.com)), maintained in a single repo.
+A self-hosted ExHentai metadata index: Go scraper + FastAPI backend +
+React frontend, running on a Raspberry Pi.
 
-The same React frontend ships in two shapes via a Vite build flag:
-
-| Mode | Command | What you get |
-|------|---------|--------------|
-| **Self-hosted** | `pnpm build` | Full app — Gallery, Favorites, Recommended, Admin, tag translation, scraper, pi-sync |
-| **Public** | `pnpm build:public` | Read-only gallery — no Admin/Favorites/Recommended, age-gate modal, settings menu, cosplay toggle |
+Thumbnails are stored on Cloudflare R2 and served straight from the CDN
+(`VITE_THUMB_BASE_URL` baked into the frontend build); `pi-sync` uploads
+new thumbs and deletes the local copies — R2 is the source of truth.
+The retired public mirror (ehstash.com: Cloudflare Worker + Neon) was
+removed; only the R2 thumb pipeline remains.
 
 ## Repository layout
 
 ```
 eh-stash/
-├── frontend/          # React + Vite SPA (shared by both modes)
-├── api/               # Python FastAPI backend (self-hosted only)
-├── scraper-go/        # Go scraper (self-hosted only)
-├── pi-sync/           # Python Pi → Neon + R2 sync worker
+├── frontend/          # React + Vite SPA
+├── api/               # Python FastAPI backend
+├── scraper-go/        # Go scraper
+├── pi-sync/           # Python Pi → R2 thumbnail sync worker
 ├── migrations/        # PostgreSQL schema migrations
-├── ehstash.com/       # Cloud-side components (public mode)
-│   ├── worker/        # TypeScript Hono Worker (Cloudflare)
-│   ├── schema/        # Neon SQL schema + blacklist
-│   ├── scripts/       # Data import / tag export / thumb upload
-│   └── demo/          # Docker Compose + Caddy for local public-mode testing
 ├── docs/              # Architecture notes and design docs
 ├── docker-compose.yaml
 ├── docker-compose.pi.yaml
 └── Makefile
 ```
 
-## Quick start — self-hosted
+## Quick start
 
 1. Copy `.env.example` → `.env` and fill in your ExHentai cookies and
    database credentials.
@@ -38,48 +32,6 @@ eh-stash/
 3. Open `http://localhost:5173`.
 
 See `docs/` for detailed architecture and sync-task documentation.
-
-## Quick start — public (ehstash.com)
-
-### Frontend
-
-```bash
-cd frontend
-cp .env.public.example .env.public
-# Fill in VITE_API_BASE_URL and VITE_THUMB_BASE_URL
-pnpm install
-pnpm build:public
-```
-
-### Worker
-
-```bash
-cd ehstash.com/worker
-npm install
-# Edit wrangler.toml — set your Neon DSN, R2 bucket, bindings
-npx wrangler deploy
-```
-
-### Schema
-
-Apply `ehstash.com/schema/001_init.sql` to your Neon database, then
-optionally load `blacklist.sql`.
-
-## How the mode flag works
-
-`frontend/src/shared/mode.js` exports `IS_PUBLIC` which is `true` when
-`import.meta.env.VITE_APP_MODE === 'public'`. This flag gates:
-
-- **Routing** — Admin, Favorites, and Recommended routes are only
-  registered in self-hosted mode.
-- **Nav** — the corresponding nav links are hidden in public mode; a
-  settings menu appears instead.
-- **Filters** — public mode shows a curated category subset with Cosplay
-  gated behind a user toggle; self-hosted shows all categories.
-- **Favorites UI** — favorite rings, badges, and icons are hidden in
-  public mode.
-- **Welcome modal** — public mode shows an age-gate / info modal on
-  first visit.
 
 ## i18n
 

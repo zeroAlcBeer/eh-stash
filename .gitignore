@@ -213,14 +213,7 @@ node_modules
 # Editors / OS
 .DS_Store
 
-# Cloudflare / Wrangler (ehstash.com/)
-.wrangler/
-.mf/
-.dev.vars
-.dev.vars.*
-
-# Cloud demo runtime data & bulk dumps
-ehstash.com/demo/thumbs/
+# Bulk dumps
 data/
 *.dump
 *.sql.bak

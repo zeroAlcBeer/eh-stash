@@ -119,73 +119,7 @@ const T = {
   'detail.comment.uploader': { 'zh-CN': '上传者评论', 'zh-TW': '上傳者評論', en: 'Uploader comment' },
   'detail.comment.anonymous': { 'zh-CN': '匿名', 'zh-TW': '匿名', en: 'Anonymous' },
 
-  // Welcome modal — step 1: age gate
-  'welcome.title': { 'zh-CN': '欢迎使用 EhStash', 'zh-TW': '歡迎使用 EhStash', en: 'Welcome to EhStash' },
-  'welcome.age.heading': {
-    'zh-CN': '请确认您已年满 18 岁',
-    'zh-TW': '請確認您已年滿 18 歲',
-    en: 'Please confirm you are 18 or older'
-  },
-  'welcome.age.body': {
-    'zh-CN': '本站汇集 ExHentai 的公开元数据，内容可能包含成人材料。继续浏览前请确认您已年满 18 岁，并接受您所在地区允许此类内容的访问。',
-    'zh-TW': '本站匯集 ExHentai 的公開中介資料，內容可能含有成人材料。繼續瀏覽前請確認您已年滿 18 歲，並接受您所在地區允許此類內容的存取。',
-    en: 'This site aggregates public metadata from ExHentai and may include adult content. Before continuing, confirm you are 18+ and that adult content is permitted in your jurisdiction.'
-  },
-  'welcome.age.yes': { 'zh-CN': '是，我已年满 18 岁', 'zh-TW': '是，我已年滿 18 歲', en: "Yes, I'm 18+" },
-  'welcome.age.no': { 'zh-CN': '否，未满 18 岁', 'zh-TW': '否，未滿 18 歲', en: 'No, I am not' },
-
-  // Welcome modal — denied terminal screen (chose "No")
-  'welcome.denied.title': { 'zh-CN': '您不符合访问条件', 'zh-TW': '您不符合存取條件', en: 'Access not permitted' },
-  'welcome.denied.body': {
-    'zh-CN': '本站内容仅面向已年满 18 岁的访问者。请关闭此页面。',
-    'zh-TW': '本站內容僅供已年滿 18 歲的訪客瀏覽，請關閉此頁面。',
-    en: 'This site is restricted to users aged 18 or older. Please close this page.'
-  },
-
-  // Welcome modal — step 2: EhStash vs ExHentai
-  'welcome.compare.title': {
-    'zh-CN': 'EhStash 与 ExHentai 有什么不同？',
-    'zh-TW': 'EhStash 與 ExHentai 有什麼不同？',
-    en: 'How does EhStash differ from ExHentai?'
-  },
-  'welcome.compare.subtitle': {
-    'zh-CN': '开始浏览前请先了解这几点',
-    'zh-TW': '開始瀏覽前請先了解這幾點',
-    en: 'A few things to know before you start'
-  },
-
-  'welcome.compare.index.title': { 'zh-CN': '索引站，不是内容站', 'zh-TW': '索引站，不是內容站', en: 'Index, not a host' },
-  'welcome.compare.index.body': {
-    'zh-CN': 'EhStash 保存元数据和封面缩略图。点击卡片可先查看站内详情，再前往 ExHentai 阅读完整画廊。',
-    'zh-TW': 'EhStash 儲存中介資料和封面縮圖。點擊卡片可先查看站內詳情，再前往 ExHentai 閱讀完整畫廊。',
-    en: 'EhStash stores metadata and cover thumbnails. Open a card for indexed details, then continue to ExHentai for the full gallery.'
-  },
-
-  'welcome.compare.fav.title': { 'zh-CN': 'Fav 排序', 'zh-TW': 'Fav 排序', en: 'Fav-first sort' },
-  'welcome.compare.fav.body': {
-    'zh-CN': '翻页是按发布时间倒序的全量切片；每页内部默认按收藏数倒序，热门内容先看到。',
-    'zh-TW': '翻頁是按發布時間遞減的全量切片；每頁內預設按收藏數遞減，熱門內容會先看到。',
-    en: 'Pagination steps through all items newest-first; within each page items are sorted by favorites — popular ones come first.'
-  },
-
-  'welcome.compare.group.title': { 'zh-CN': 'Group 功能', 'zh-TW': 'Group 功能', en: 'Group collapse' },
-  'welcome.compare.group.body': {
-    'zh-CN': '同系列的画廊会聚合成一张卡片，点击后在弹窗里查看全部版本。',
-    'zh-TW': '同系列的畫廊會聚合成一張卡片，點擊後可在彈窗中查看所有版本。',
-    en: 'Galleries in the same series collapse into one card — click to see every version in the modal.'
-  },
-
-  'welcome.compare.continue': { 'zh-CN': '我明白了，开始浏览', 'zh-TW': '我明白了，開始瀏覽', en: 'Got it, start browsing' },
-
-  // Settings menu
-  'settings.title':              { 'zh-CN': '设置',                'zh-TW': '設定',                en: 'Settings' },
-  'settings.open':               { 'zh-CN': '打开设置',            'zh-TW': '開啟設定',            en: 'Open settings' },
-  'settings.allowCosplay.label':      { 'zh-CN': '我可以接受三次元画廊', 'zh-TW': '我可以接受三次元畫廊', en: 'Show live-action galleries' },
-  'settings.allowCosplay.hint':       { 'zh-CN': '勾选后 Cosplay 分类与画廊会出现在列表中',
-                                   'zh-TW': '勾選後 Cosplay 分類與畫廊會出現在清單中',
-                                   en:      'Once enabled, Cosplay galleries appear in the listing.' },
-
-  // Gallery page — self-hosted extras
+  // Gallery page
   'results.filtered':        { 'zh-CN': '· 显示 {count} 条', 'zh-TW': '· 顯示 {count} 條', en: '· showing {count}' },
   'translation.on':          { 'zh-CN': '开启中文翻译', 'zh-TW': '開啟中文翻譯', en: 'Enable Chinese translation' },
   'translation.off':         { 'zh-CN': '关闭中文翻译', 'zh-TW': '關閉中文翻譯', en: 'Disable Chinese translation' },

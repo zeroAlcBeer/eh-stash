@@ -1666,7 +1666,7 @@ function CloudSyncPanel() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <p className="text-xs font-medium uppercase tracking-wider text-gray-500">Pi → Neon / R2</p>
+          <p className="text-xs font-medium uppercase tracking-wider text-gray-500">Pi → R2</p>
           <p className="mt-1 text-sm text-gray-400">Runtime heartbeat and export history from the local Pi database.</p>
         </div>
         <div className="flex items-center gap-2">
@@ -1757,7 +1757,7 @@ function CloudSyncPanel() {
           <CloudLinkNode
             icon={Cloud}
             eyebrow="Destinations"
-            title="Neon + R2"
+            title="R2"
             detail={`${formatNumber(latest?.pushed_count)} pushed · ${formatNumber(issueCount)} issues`}
             tone={issueCount === 0 && latest?.status === 'succeeded' ? 'good' : 'warn'}
           />
