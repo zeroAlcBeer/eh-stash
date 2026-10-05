@@ -7,20 +7,15 @@ and `konakore` repos.
 
 ## 1. GitHub Actions
 
-Two workflows under `.github/workflows/`:
+One workflow under `.github/workflows/`:
 
 | Workflow | Runner | Trigger | Job |
 |---|---|---|---|
 | `ci.yml` | GitHub-hosted | every PR + push to `master` | scraper (`go vet/build/test`), python (deps + byte-compile for api & pi-sync), frontend (`pnpm build`) |
-| `deploy.yml` | self-hosted `[self-hosted, pi]` | push to `master` (path-filtered) + manual `workflow_dispatch` | release only changed components → pin tags in stack `.env` → sync compose → roll → verify health |
 
-`deploy.yml` rebuilds **only the components whose paths changed** (via
-`dorny/paths-filter`), so a frontend-only commit never rebuilds the scraper.
-Force a release with the `workflow_dispatch` `components` input
-(e.g. `api,pi-sync`).
-
-> **Security (public repo):** `deploy.yml` runs on the Pi. It must never gain
-> a `pull_request` trigger — only the repo owner can push `master`.
+Deploys are **manual** (§3) — there is no deploy workflow. The previous
+`deploy.yml` ran on a self-hosted Pi runner that was lost in a disk
+migration; the manual `make release-*` path replaces it permanently.
 
 ---
 
@@ -33,27 +28,53 @@ Each of the four deployable services is versioned by the 12-char git SHA:
 - The Pi stack pins the SHA per component in `/opt/stacks/ehstash/.env`
   (`API_TAG`, `SCRAPER_TAG`, `FRONTEND_TAG`, `PI_SYNC_TAG`), consumed by
   `docker-compose.pi.yaml`.
-- `deploy.yml` rewrites the changed component's `*_TAG` to the new SHA and
-  rolls only those services (`docker compose pull <svc> && up -d`), never
-  touching the floating postgres/pgvector tag.
+- A deploy rewrites only the changed components' `*_TAG` and rolls only
+  those services (`docker compose pull <svc> && up -d`), never touching
+  the floating postgres/pgvector tag.
 
 Makefile recipes use the `docker compose` v2 plugin (`COMPOSE ?= docker
 compose`) — the Pi has no `docker-compose` v1 binary.
 
 ---
 
-## 3. Pi self-hosted runner (one-time)
+## 3. Manual deploy runbook
 
-Self-hosted runners are registered **per account**. A runner serving another
-account/repo will not pick up `zeroAlcBeer/eh-stash` jobs. Register one under
-this repo with labels `[self-hosted, pi]`:
+Deploys run from a workstation (the Mac, arm64 — native builds match the
+Pi), not CI:
 
-1. Repo → Settings → Actions → Runners → *New self-hosted runner* → follow
-   the `./config.sh` steps, adding `--labels pi`.
-2. The runner user needs: Docker access, LAN reachability to the registry,
-   and passwordless `sudo` for the `sed`/`cp`/`docker compose` steps against
-   `/opt/stacks/ehstash`.
-3. Run it as a service (`./svc.sh install && ./svc.sh start`).
+1. Release the changed components:
+
+   ```sh
+   make release-api        # or release-scraper / release-pi-sync
+   VITE_THUMB_BASE_URL=<r2-thumb-origin> make release-frontend
+   ```
+
+   `VITE_THUMB_BASE_URL` (the R2 thumb CDN origin) is baked into the
+   frontend bundle at build time. Read the current value from the stack:
+   `sudo grep ^VITE_THUMB_BASE_URL /opt/stacks/ehstash/.env`. Empty/missing
+   falls back to local `/v1/thumbs`.
+
+2. If `docker-compose.pi.yaml` changed, sync it to the stack and validate:
+
+   ```sh
+   scp docker-compose.pi.yaml pi:/tmp/compose.yaml
+   ssh pi 'sudo cp /tmp/compose.yaml /opt/stacks/ehstash/compose.yaml &&
+           cd /opt/stacks/ehstash && sudo docker compose config --quiet'
+   ```
+
+3. On the Pi, pin each released SHA in `/opt/stacks/ehstash/.env`
+   (`API_TAG` / `SCRAPER_TAG` / `FRONTEND_TAG` / `PI_SYNC_TAG`).
+
+4. Roll only the changed services — a **scoped** pull, never an unscoped
+   `docker compose pull` (the floating postgres/pgvector tag must not be
+   allowed to restart the DB on an unrelated deploy):
+
+   ```sh
+   cd /opt/stacks/ehstash
+   sudo docker compose pull <svc> && sudo docker compose up -d
+   ```
+
+5. Verify all four health endpoints (§4) return 200.
 
 ---
 
@@ -68,8 +89,8 @@ Every service exposes a liveness probe (host ports on the Pi):
 | frontend | `http://<pi>:4173/` | vite preview root |
 | pi-sync | `http://<pi>:8097/healthz` | daemon thread; real loop health is in the DB runtime heartbeat |
 
-`deploy.yml`'s Verify step polls all four for HTTP 200 before the job
-succeeds, so a broken roll fails the deploy.
+After a deploy, poll all four for HTTP 200 — a broken roll means the
+release didn't take.
 
 ---
 
